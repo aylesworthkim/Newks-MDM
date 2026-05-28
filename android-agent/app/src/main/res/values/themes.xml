@@ -1,0 +1,10 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!--
+      Plain NoActionBar theme so the Activity launches cleanly. All actual
+      visual styling is handled by Compose's MaterialTheme inside AgentApp.kt,
+      not by Android XML themes.
+    -->
+    <style name="Theme.NewksMdmAgent" parent="android:Theme.DeviceDefault.Light.NoActionBar">
+        <item name="android:windowLightStatusBar" tools:targetApi="m">true</item>
+    </style>
+</resources>

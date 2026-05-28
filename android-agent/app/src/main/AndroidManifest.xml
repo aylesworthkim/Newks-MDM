@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+          xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Networking. The agent talks to the backend over LAN. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- Foreground service permissions. The heartbeat service uses DATA_SYNC;
+         the screen-capture service uses MEDIA_PROJECTION (Android 14+
+         requires the subtype to match what the service actually does). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- Survive device reboots. BootReceiver listens for BOOT_COMPLETED and
+         starts HeartbeatService if a deviceId is saved locally. Standard
+         Android feature, no device-owner privileges required. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <application
+        android:label="@string/app_name"
+        android:theme="@style/Theme.NewksMdmAgent"
+        android:supportsRtl="true"
+        android:allowBackup="false"
+        tools:targetApi="35"
+        android:usesCleartextTraffic="true">
+        <!--
+          usesCleartextTraffic is enabled because for MVP testing the backend
+          runs over HTTP on the LAN. Before any real deployment switch to
+          HTTPS and tighten this via a network_security_config.
+        -->
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+          Foreground service that keeps the WebSocket loop alive when the UI
+          is closed. dataSync is the closest matching subtype for what this
+          service does (background heartbeat + command exchange).
+        -->
+        <service
+            android:name=".HeartbeatService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <!--
+          Foreground service that owns the MediaProjection + VirtualDisplay
+          for an active remote screen session. Separate from HeartbeatService
+          because it has a different foregroundServiceType and a different
+          lifecycle (starts/stops with each session, not with the app).
+        -->
+        <service
+            android:name=".ScreenCaptureService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
+
+        <!--
+          Headless activity used solely to surface Android's screen-capture
+          consent dialog. The dialog requires an Activity result; this
+          activity has no UI of its own.
+        -->
+        <activity
+            android:name=".MediaProjectionConsentActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+        <!--
+          Accessibility service used solely to dispatch input gestures
+          (taps + swipes + global keys) during an active remote-control
+          session. Must be manually enabled by the user in
+          Settings -> Accessibility -> Newk's MDM Agent.
+        -->
+        <service
+            android:name=".AgentAccessibilityService"
+            android:exported="false"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
+        <!--
+          Boot receiver. Restarts HeartbeatService on device boot so the
+          tablet reconnects to the portal without anyone opening the app
+          first. Exported because BOOT_COMPLETED is delivered by the system,
+          not from our own code.
+        -->
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="true"
+            android:enabled="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

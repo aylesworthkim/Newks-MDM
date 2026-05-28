@@ -1,0 +1,78 @@
+// :app module build file.
+//
+// Stack:
+//   - Kotlin 2.0.21 with the Compose compiler plugin (no separate kotlinCompilerExtensionVersion).
+//   - Jetpack Compose Material3 UI via the Compose BOM (single source of truth for versions).
+//   - OkHttp for HTTP and WebSocket -- one library covers both transports we need.
+//   - kotlinx.serialization for the small JSON message types we send to the backend.
+//   - kotlinx.coroutines so the network calls don't block the UI thread.
+
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+    id 'org.jetbrains.kotlin.plugin.compose'
+    id 'org.jetbrains.kotlin.plugin.serialization'
+}
+
+android {
+    namespace 'com.newks.mdmagent'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "com.newks.mdmagent"
+        // 26 (Android 8.0) covers ~94% of devices in the wild and is the first
+        // SDK with the modern foreground-service contract we need for the
+        // heartbeat service (added in chunk 4c).
+        minSdk 26
+        targetSdk 35
+        versionCode 4
+        versionName "0.4.0"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+        debug {
+            // No special config -- inherits cleartext + debuggable.
+        }
+    }
+
+    buildFeatures {
+        compose true
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+}
+
+dependencies {
+    def composeBom = platform('androidx.compose:compose-bom:2024.12.01')
+    implementation composeBom
+
+    // Compose + lifecycle + activity glue.
+    implementation 'androidx.core:core-ktx:1.15.0'
+    implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.8.7'
+    implementation 'androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7'
+    implementation 'androidx.activity:activity-compose:1.9.3'
+
+    // UI.
+    implementation 'androidx.compose.ui:ui'
+    implementation 'androidx.compose.ui:ui-graphics'
+    implementation 'androidx.compose.ui:ui-tooling-preview'
+    implementation 'androidx.compose.material3:material3'
+
+    // HTTP + WebSocket.
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+
+    // JSON serialization.
+    implementation 'org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3'
+
+    // Coroutines.
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0'
+}

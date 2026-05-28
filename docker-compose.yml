@@ -1,0 +1,17 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: remote_mdm
+    ports:
+      # Host port 5433 -> container 5432. We avoid 5432 on the host because
+      # another native Postgres install is already listening on 5432 and
+      # would silently intercept the backend's connection attempts.
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docs/database-schema.sql:/docker-entrypoint-initdb.d/001-schema.sql
+volumes:
+  postgres_data:

@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Newk\'s MDM Agent</string>
+    <string name="accessibility_service_summary">Allows Newk\'s support staff to remotely tap and swipe during a remote-control session.</string>
+    <string name="accessibility_service_description">Newk\'s MDM Agent uses Accessibility to relay support-staff taps and swipes to the screen during an active remote-control session. No on-screen content is read or stored.</string>
+</resources>
