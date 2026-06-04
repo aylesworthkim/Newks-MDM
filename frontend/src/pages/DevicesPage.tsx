@@ -555,18 +555,22 @@ function DeviceDetail({ device, onCleared }: DeviceDetailProps) {
         );
       }
       // Open in a new window so the operator can keep the device list visible
-      // alongside the live screen.
-      const url = `/devices/${device.id}/screen?session=${response.sessionId}`;
-      const popup = window.open(
+      // alongside the live screen. The &popup=1 flag lets RemoteScreenPage
+      // know it should close the window (vs navigate) on End Session --
+      // window.opener is null due to noopener, so a URL flag is the
+      // reliable signal here.
+      //
+      // We deliberately don't check window.open's return value: with
+      // noopener it returns null in most browsers even on success, so a
+      // !popup check would always show a false-positive error. If the
+      // user's browser blocks popups they'll see Chrome's own indicator
+      // in the URL bar -- nothing for us to surface.
+      const url = `/devices/${device.id}/screen?session=${response.sessionId}&popup=1`;
+      window.open(
         url,
         `mdm-session-${response.sessionId}`,
         'noopener,noreferrer,width=1200,height=900,resizable=yes,scrollbars=yes',
       );
-      if (!popup) {
-        setSessionError(
-          'Could not open the session window. Allow popups for this site and try again.',
-        );
-      }
     } catch (err) {
       setSessionError(err instanceof ApiError ? err.message : 'failed to start session');
     } finally {

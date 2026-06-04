@@ -48,16 +48,15 @@ export function RemoteScreenPage() {
   const imgRef = useRef<HTMLImageElement>(null);
   const dragStartRef = useRef<{ x: number; y: number; time: number } | null>(null);
 
-  // Detect whether we were opened via window.open() (popup) vs. direct nav.
-  // If we have an opener, "end session" should close us; otherwise it should
-  // navigate back. window.opener stays set across same-origin popups.
-  const isPopup = useMemo(() => {
-    try {
-      return window.opener !== null;
-    } catch {
-      return false;
-    }
-  }, []);
+  // Detect whether we were opened via window.open (popup) vs direct nav.
+  // window.opener would be the obvious check, but DevicesPage opens us
+  // with noopener for security -- that nulls window.opener in the new
+  // window. So we use a URL flag the opener sets explicitly: &popup=1.
+  // When true, End Session closes the window; otherwise it navigates back.
+  const isPopup = useMemo(
+    () => searchParams.get('popup') === '1',
+    [searchParams],
+  );
 
   const hasControlRole = user?.role === 'admin' || user?.role === 'support';
   const canControl = hasControlRole && status === 'active' && accessibilityEnabled !== false;
