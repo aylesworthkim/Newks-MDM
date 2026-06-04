@@ -153,12 +153,12 @@ class ConnectionManager private constructor(
                 val sent = wsClient?.send(json.encodeToString(
                     HeartbeatMessage.serializer(),
                     HeartbeatMessage(
-                        // Readiness flags so the portal can show "ready for
-                        // unattended access" vs "needs a tap on the tablet
-                        // first." Read at heartbeat time so any user change
-                        // (granting consent, toggling accessibility) appears
-                        // in the portal within one heartbeat interval.
-                        consentArmed = ScreenCaptureService.hasActiveProjection,
+                        // v0.5.0+: accessibility is the single load-bearing
+                        // capability. consentArmed (kept for backend wire-
+                        // protocol compatibility) is now equivalent to
+                        // accessibilityEnabled -- both true means the
+                        // tablet can be remote-viewed without any prompt.
+                        consentArmed = AgentAccessibilityService.isEnabled(),
                         accessibilityEnabled = AgentAccessibilityService.isEnabled(),
                     ),
                 )) ?: false

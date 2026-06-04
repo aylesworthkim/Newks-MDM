@@ -6,12 +6,12 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
-    <!-- Foreground service permissions. The heartbeat service uses DATA_SYNC;
-         the screen-capture service uses MEDIA_PROJECTION (Android 14+
-         requires the subtype to match what the service actually does). -->
+    <!-- Foreground service permissions. v0.5.0+ both HeartbeatService and
+         ScreenCaptureService use DATA_SYNC (screen capture is now driven
+         by AccessibilityService.takeScreenshot rather than MediaProjection,
+         so the MEDIA_PROJECTION foreground type is no longer needed). -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
@@ -54,28 +54,16 @@
             android:foregroundServiceType="dataSync" />
 
         <!--
-          Foreground service that owns the MediaProjection + VirtualDisplay
-          for an active remote screen session. Separate from HeartbeatService
-          because it has a different foregroundServiceType and a different
-          lifecycle (starts/stops with each session, not with the app).
+          Foreground service that runs the per-session screen-capture loop.
+          In v0.5.0+ this is a thin wrapper around
+          AgentAccessibilityService.takeScreenshot. No MediaProjection,
+          no per-session consent dialog. Starts/stops with each session.
         -->
         <service
             android:name=".ScreenCaptureService"
             android:enabled="true"
             android:exported="false"
-            android:foregroundServiceType="mediaProjection" />
-
-        <!--
-          Headless activity used solely to surface Android's screen-capture
-          consent dialog. The dialog requires an Activity result; this
-          activity has no UI of its own.
-        -->
-        <activity
-            android:name=".MediaProjectionConsentActivity"
-            android:exported="false"
-            android:excludeFromRecents="true"
-            android:noHistory="true"
-            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+            android:foregroundServiceType="dataSync" />
 
         <!--
           Accessibility service used solely to dispatch input gestures

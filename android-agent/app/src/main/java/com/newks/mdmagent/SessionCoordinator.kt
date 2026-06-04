@@ -7,18 +7,15 @@ import android.util.Log
 
 /**
  * Small facade between the WebSocket layer ([ConnectionManager]) and the
- * Android screen-capture machinery ([MediaProjectionConsentActivity] +
- * [ScreenCaptureService]). Keeps ConnectionManager unaware of Activity /
- * Service intents, and gives the capture pieces a single place to call
- * back into the WS layer.
+ * Android screen-capture machinery ([ScreenCaptureService]). Keeps
+ * ConnectionManager unaware of Service intents, and gives the capture
+ * pieces a single place to call back into the WS layer.
  *
- * Consent is requested ONCE per app lifetime: the first time
- * [requestStart] is called we route through the consent activity to get a
- * MediaProjection token. After that, [ScreenCaptureService] caches the
- * token and subsequent sessions skip the dialog entirely until the user
- * revokes via the system notification, the process dies, or the tablet
- * reboots. See ScreenCaptureService's class comment for the full lifetime
- * picture.
+ * In v0.5.0+ this is dramatically simpler than the MediaProjection-era
+ * implementation -- there's no per-session consent activity to launch.
+ * If the AccessibilityService is enabled, capture starts immediately; if
+ * not, ScreenCaptureService surfaces a SESSION_STOPPED so the operator
+ * sees an actionable error in the portal.
  */
 object SessionCoordinator {
 
@@ -26,23 +23,15 @@ object SessionCoordinator {
 
     /** Called from ConnectionManager when a START_SESSION arrives over WS. */
     fun requestStart(appContext: Context, sessionId: String) {
-        if (ScreenCaptureService.hasActiveProjection) {
-            // Cached projection -- send the session id straight to the
-            // running service, skip the consent dialog.
-            Log.d(TAG, "session $sessionId: reusing cached MediaProjection (no consent prompt)")
-            val intent = Intent(appContext, ScreenCaptureService::class.java).apply {
-                putExtra(ScreenCaptureService.EXTRA_SESSION_ID, sessionId)
-            }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                appContext.startForegroundService(intent)
-            } else {
-                appContext.startService(intent)
-            }
-            return
+        Log.d(TAG, "session $sessionId: starting capture")
+        val intent = Intent(appContext, ScreenCaptureService::class.java).apply {
+            putExtra(ScreenCaptureService.EXTRA_SESSION_ID, sessionId)
         }
-
-        Log.d(TAG, "session $sessionId: requesting consent (first session this app lifetime)")
-        MediaProjectionConsentActivity.launch(appContext, sessionId)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            appContext.startForegroundService(intent)
+        } else {
+            appContext.startService(intent)
+        }
     }
 
     /** Called from ConnectionManager when a STOP_SESSION arrives over WS. */
@@ -59,13 +48,6 @@ object SessionCoordinator {
         }
     }
 
-    /** Called when the user denies consent in [MediaProjectionConsentActivity]. */
-    fun notifyDenied(appContext: Context, sessionId: String, reason: String) {
-        ConnectionManager
-            .getOrCreate(appContext, AgentConfig(appContext))
-            .sendSessionDenied(sessionId, reason)
-    }
-
     /** Called by [ScreenCaptureService] once capture is actually running. */
     fun notifyStarted(appContext: Context, sessionId: String, width: Int, height: Int) {
         ConnectionManager
@@ -73,7 +55,8 @@ object SessionCoordinator {
             .sendSessionStarted(sessionId, width, height)
     }
 
-    /** Called by [ScreenCaptureService] when capture ends (user, server, or device). */
+    /** Called by [ScreenCaptureService] when capture ends (server, user
+     *  toggle, accessibility loss, etc.). */
     fun notifyStopped(appContext: Context, sessionId: String, reason: String) {
         ConnectionManager
             .getOrCreate(appContext, AgentConfig(appContext))

@@ -60,22 +60,19 @@ function readinessFor(d: Device): { label: string; tone: 'ok' | 'warn' | 'off'; 
       tooltip: 'Tablet is not currently connected. Readiness will refresh once it reconnects.',
     };
   }
-  if (!d.consent_armed) {
+  // v0.5.0+ agent: both consent_armed and accessibility_enabled track the
+  // same thing (accessibility service status). Older agents may still
+  // report consent_armed independently; treat either being false as
+  // "remote support not ready" since both are needed.
+  if (!d.accessibility_enabled || !d.consent_armed) {
     return {
-      label: 'Needs tap',
+      label: 'Needs setup',
       tone: 'warn',
       tooltip:
-        'Tablet is online but the screen-share consent has not been granted since the last reboot. ' +
-        'Starting a remote session will prompt the store manager to tap "Start now" on the tablet.',
-    };
-  }
-  if (!d.accessibility_enabled) {
-    return {
-      label: 'View only',
-      tone: 'warn',
-      tooltip:
-        'IT can view the screen without prompting. Remote-control inputs (taps and swipes) ' +
-        'will not work until the agent\'s accessibility service is enabled in tablet Settings.',
+        'Tablet is online but the agent\'s accessibility service is not enabled. ' +
+        'Remote view + control won\'t work until someone taps the notification on ' +
+        'the tablet (or goes to Settings → Accessibility → Newk\'s MDM Agent) and ' +
+        'turns it on.',
     };
   }
   return {

@@ -10,6 +10,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.provider.Settings
 import android.util.Log
 import androidx.core.app.NotificationCompat
 
@@ -17,13 +18,12 @@ import androidx.core.app.NotificationCompat
  * Foreground service whose job is to keep the agent's process alive so the
  * WebSocket loop in [ConnectionManager] can run when the app's UI is closed.
  *
- * Also responsible for the post-boot "Tap to enable remote support"
- * notification: after a reboot the MediaProjection token is gone (Android
- * destroys it with the process), so the first remote-screen session of the
- * day would otherwise prompt the store manager mid-support-call. To avoid
- * that, we post a high-priority notification when this service starts
- * without an active projection, asking the user to grant up front. The
- * grant is then cached for the day (see [ScreenCaptureService]).
+ * Also responsible for nudging the user to enable the AccessibilityService
+ * if it isn't already. In v0.5.0+ accessibility is the load-bearing
+ * capability for remote support -- both screen capture and input dispatch
+ * depend on it. If a store manager disables it (or it gets reset after a
+ * system update), the agent is online but no remote sessions will work,
+ * which is exactly the case where we want to prompt them.
  */
 class HeartbeatService : Service() {
 
@@ -36,9 +36,6 @@ class HeartbeatService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val notification = buildStatusNotification("Connected to Newk's portal")
 
-        // Android 14+ requires us to declare a foregroundServiceType when
-        // calling startForeground. "dataSync" is the closest matching subtype
-        // for a heartbeat/management agent.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(
                 STATUS_NOTIFICATION_ID,
@@ -49,28 +46,23 @@ class HeartbeatService : Service() {
             startForeground(STATUS_NOTIFICATION_ID, notification)
         }
 
-        // Start (or join) the singleton connection.
+        // Start (or join) the singleton WS connection.
         val config = AgentConfig(applicationContext)
         ConnectionManager.getOrCreate(applicationContext, config).start()
 
-        // If we're enrolled but the projection isn't armed (fresh boot,
-        // process restart, prior revoke), surface the enable-remote-support
-        // prompt so the store manager can grant once instead of being
-        // prompted mid-session.
+        // If accessibility is off, surface the actionable prompt so the
+        // store manager can re-enable it without IT having to walk them
+        // through Settings.
         maybePostEnablePromptNotification()
 
-        // START_STICKY: if the system kills the service for resources, ask it
-        // to restart with a null intent. Combined with the sticky foreground
-        // notification this makes the agent robust to OOM kills.
         return START_STICKY
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        // Deliberately do NOT stop the connection on destroy. The service can
-        // be torn down by Android during a memory squeeze even when we want
-        // to keep working. The connection survives, the system restarts us
-        // (START_STICKY), and the next onStartCommand re-attaches.
+        // Deliberately do NOT stop the connection on destroy. The system
+        // can tear us down during a memory squeeze; we want the next
+        // onStartCommand (START_STICKY) to re-attach.
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -96,12 +88,10 @@ class HeartbeatService : Service() {
             val channel = NotificationChannel(
                 ENABLE_PROMPT_CHANNEL_ID,
                 "Remote support enablement",
-                // DEFAULT importance so the notification surfaces visibly on
-                // the lock screen / status bar. The store manager needs to
-                // see this on first power-on of the day.
-                NotificationManager.IMPORTANCE_DEFAULT,
+                NotificationManager.IMPORTANCE_HIGH,
             ).apply {
-                description = "Prompts to allow remote screen sharing after device boot"
+                description =
+                    "Prompts to enable the accessibility service when remote support is disabled"
                 setShowBadge(true)
             }
             nm.createNotificationChannel(channel)
@@ -112,9 +102,7 @@ class HeartbeatService : Service() {
         val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
         val tapPendingIntent = launchIntent?.let {
             PendingIntent.getActivity(
-                this,
-                0,
-                it,
+                this, 0, it,
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
             )
         }
@@ -122,8 +110,6 @@ class HeartbeatService : Service() {
         return NotificationCompat.Builder(this, STATUS_CHANNEL_ID)
             .setContentTitle("Newk's MDM Agent")
             .setContentText(statusText)
-            // System icon -- avoids needing a custom drawable in chunk 4c.
-            // Replace with a branded icon when we get one.
             .setSmallIcon(android.R.drawable.stat_notify_sync_noanim)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -132,15 +118,9 @@ class HeartbeatService : Service() {
     }
 
     /**
-     * Post the "Tap to enable remote support" notification IF we're enrolled
-     * AND the MediaProjection isn't already armed. No-op otherwise.
-     *
-     * Skipping when not enrolled: a brand-new install where the user hasn't
-     * gone through enrollment yet shouldn't see this prompt -- they need to
-     * enroll first.
-     *
-     * Skipping when projection IS armed: avoids re-pestering the user after
-     * they've already granted today.
+     * Post the "Tap to enable remote support" notification IF enrolled AND
+     * the accessibility service is NOT enabled. Cancels the notification
+     * (if any) when accessibility IS enabled.
      */
     private fun maybePostEnablePromptNotification() {
         val config = AgentConfig(applicationContext)
@@ -148,27 +128,32 @@ class HeartbeatService : Service() {
             Log.d(TAG, "not enrolled; skipping enable-prompt notification")
             return
         }
-        if (ScreenCaptureService.hasActiveProjection) {
-            Log.d(TAG, "projection already armed; skipping enable-prompt notification")
+        if (AgentAccessibilityService.isEnabled() ||
+            AgentAccessibilityService.isEnabledInSettings(applicationContext)
+        ) {
+            Log.d(TAG, "accessibility already enabled; cancelling any stale prompt")
             cancelEnablePromptNotification(this)
             return
         }
 
+        // Deep-link to the system Accessibility settings page. The user
+        // toggles "Newk's MDM Agent" on, returns to whatever they were
+        // doing; the next heartbeat tick cancels this notification.
+        val settingsIntent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
         val pendingIntent = PendingIntent.getActivity(
-            this,
-            0,
-            MediaProjectionConsentActivity.preArmIntent(this),
+            this, 0, settingsIntent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
 
         val notification = NotificationCompat.Builder(this, ENABLE_PROMPT_CHANNEL_ID)
             .setContentTitle("Newk's MDM Agent")
-            .setContentText("Tap to enable remote support for this tablet today")
+            .setContentText("Tap to enable remote support for this tablet")
             .setStyle(NotificationCompat.BigTextStyle().bigText(
-                "Newk's IT will be able to remotely view this screen during a " +
-                "support call. You'll see a screen-sharing icon while a session " +
-                "is active. Tap to grant -- no further prompts until the tablet " +
-                "reboots.",
+                "Newk's IT cannot remotely view or assist with this tablet until the " +
+                "accessibility service is enabled. Tap to open Accessibility settings " +
+                "and toggle \"Newk's MDM Agent\" on.",
             ))
             .setSmallIcon(android.R.drawable.stat_notify_more)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
@@ -178,7 +163,7 @@ class HeartbeatService : Service() {
 
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         nm.notify(ENABLE_PROMPT_NOTIFICATION_ID, notification)
-        Log.d(TAG, "posted enable-prompt notification")
+        Log.d(TAG, "posted enable-prompt notification (accessibility off)")
     }
 
     companion object {
@@ -201,10 +186,9 @@ class HeartbeatService : Service() {
             context.stopService(Intent(context, HeartbeatService::class.java))
         }
 
-        /** Called by [ScreenCaptureService] after a MediaProjection is
-         *  successfully cached, so the now-redundant prompt notification
-         *  disappears from the status bar. Safe to call when no notification
-         *  was posted; NotificationManager silently no-ops. */
+        /** Called by other parts of the agent when the enable-prompt is no
+         *  longer relevant (e.g. accessibility just got enabled). Safe to
+         *  call when no notification was posted. */
         fun cancelEnablePromptNotification(context: Context) {
             val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             nm.cancel(ENABLE_PROMPT_NOTIFICATION_ID)

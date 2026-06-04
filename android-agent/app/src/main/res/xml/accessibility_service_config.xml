@@ -1,11 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  AccessibilityService config. The only capability we actually want is
-  `canPerformGestures` (for dispatching taps + swipes). We declare the
-  minimum event subscription (typeWindowStateChanged) because the framework
-  requires at least one event type to be set, but we ignore those events
-  in code. We deliberately do NOT request canRetrieveWindowContent because
-  we don't need to inspect on-screen UI. This service is purely input dispatch.
+  AccessibilityService config. This service is the load-bearing piece of
+  remote support in v0.5.0+. It powers BOTH input dispatch (taps, swipes,
+  system keys) AND screen capture via takeScreenshot (API 30+).
+
+  Switching to accessibility-based capture removed the MediaProjection
+  consent dialog entirely. Once the user enables this service once in
+  Settings, support staff can view and control the tablet across reboots
+  with no per-session prompts.
+
+  We deliberately do NOT request canRetrieveWindowContent. We don't need
+  to inspect or log the on-screen view hierarchy. Screen capture (via
+  takeScreenshot) is a separate capability flag.
 -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:accessibilityEventTypes="typeWindowStateChanged"
@@ -13,6 +19,7 @@
     android:accessibilityFlags="flagDefault"
     android:canPerformGestures="true"
     android:canRetrieveWindowContent="false"
+    android:canTakeScreenshot="true"
     android:notificationTimeout="100"
     android:description="@string/accessibility_service_description"
     android:summary="@string/accessibility_service_summary" />
