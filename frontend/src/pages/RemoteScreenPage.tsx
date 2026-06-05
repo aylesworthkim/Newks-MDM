@@ -58,6 +58,14 @@ export function RemoteScreenPage() {
     [searchParams],
   );
 
+  // Auto-resize the popup window once we know the device's aspect ratio.
+  // DevicesPage opens us at a default 1200x900 (landscape) because it
+  // doesn't know the device's orientation up front. Once the first frame
+  // lands we know the real aspect; resize to fit so the screen image
+  // takes up the whole window without letterboxing -- bigger image = more
+  // accurate clicks. Only runs once per session.
+  const popupResizedRef = useRef(false);
+
   const hasControlRole = user?.role === 'admin' || user?.role === 'support';
   const canControl = hasControlRole && status === 'active' && accessibilityEnabled !== false;
 
@@ -298,10 +306,41 @@ export function RemoteScreenPage() {
                 onMouseUp={onMouseUp}
                 onMouseLeave={onMouseLeave}
                 onContextMenu={(e) => e.preventDefault()}
+                onLoad={(e) => {
+                  // First-frame popup resize. Reads the natural image dims,
+                  // resizes the popup window to ~85% of screen with chrome
+                  // padding, so the device screen fills the popup.
+                  if (!isPopup) return;
+                  if (popupResizedRef.current) return;
+                  const img = e.currentTarget;
+                  const w = img.naturalWidth;
+                  const h = img.naturalHeight;
+                  if (!w || !h) return;
+                  popupResizedRef.current = true;
+                  const availW = window.screen.availWidth;
+                  const availH = window.screen.availHeight;
+                  // Allow ~85% of screen, reserving chrome padding for the
+                  // popup's title bar + the page's header + key buttons.
+                  const chromeW = 32;
+                  const chromeH = 200;
+                  const usableW = availW * 0.85 - chromeW;
+                  const usableH = availH * 0.85 - chromeH;
+                  const fit = Math.min(usableW / w, usableH / h);
+                  const newW = Math.round(w * fit + chromeW);
+                  const newH = Math.round(h * fit + chromeH);
+                  try {
+                    window.resizeTo(newW, newH);
+                  } catch {
+                    // Some browsers / popup configs block resizeTo. Silent
+                    // fallback: the maxHeight CSS still gives a usable view.
+                  }
+                }}
                 style={{
                   maxWidth: '100%',
                   display: 'block',
-                  maxHeight: '70vh',
+                  // 85vh instead of 70vh so portrait-oriented devices use
+                  // more of the popup vertically when resizeTo is blocked.
+                  maxHeight: '85vh',
                   cursor: canControl ? 'crosshair' : 'default',
                 }}
               />

@@ -188,12 +188,15 @@ class ScreenCaptureService : Service() {
         private const val CHANNEL_ID = "mdm_screen_session"
         private const val NOTIFICATION_ID = 1002
 
-        // MVP capture settings -- 1 fps, 50% scale, JPEG quality 50.
-        // Accessibility-based takeScreenshot is rate-limited to ~3/sec by
-        // Android so we have headroom to crank these if bandwidth allows.
-        private const val FRAME_INTERVAL_MS = 1_000L
-        private const val SCALE = 0.5f
-        private const val JPEG_QUALITY = 50
+        // Capture settings tuned for clarity vs bandwidth. Each frame at these
+        // settings is ~150-250 KB depending on screen content; at 2 fps that's
+        // ~400 KB/s per active session, well within Cloudways' budget.
+        // takeScreenshot is rate-limited to ~3/sec by Android, so 2 fps leaves
+        // headroom for the occasional retry. Increase JPEG_QUALITY toward 85
+        // if quality is still insufficient at the cost of more bandwidth.
+        private const val FRAME_INTERVAL_MS = 500L     // 2 fps
+        private const val SCALE = 0.75f                 // 75% of native resolution
+        private const val JPEG_QUALITY = 70             // 70/100 -- noticeably sharper than 50
         private const val TAG = "NewksMdm"
     }
 }
