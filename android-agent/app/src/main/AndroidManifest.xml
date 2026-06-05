@@ -20,6 +20,16 @@
          Android feature, no device-owner privileges required. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
+    <!-- Required on Android 11+ for CommandExecutor.collectUserInstalledPackages
+         to enumerate installed apps in FETCH_DIAGNOSTICS. Without this, the
+         package-visibility filter in API 30+ would only return apps we have
+         a queries declaration for, which is not useful for "tell me what's
+         actually installed on this tablet". We are sideloaded (no Play
+         distribution) so Play's restrictions on QUERY_ALL_PACKAGES do not
+         apply to us. -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
+                     tools:ignore="QueryAllPackagesPermission" />
+
     <application
         android:label="@string/app_name"
         android:theme="@style/Theme.NewksMdmAgent"

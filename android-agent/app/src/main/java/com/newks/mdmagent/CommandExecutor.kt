@@ -2,13 +2,22 @@ package com.newks.mdmagent
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ApplicationInfo
+import android.content.pm.PackageManager
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.os.BatteryManager
 import android.os.Build
+import android.os.Environment
 import android.os.SystemClock
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
+import kotlinx.serialization.json.putJsonObject
 
 /**
  * Carries out the four allowlisted command types we accept. NEW COMMAND
@@ -51,6 +60,18 @@ class CommandExecutor(private val context: Context) {
 
     private fun diagnostics(): CommandResult {
         val runtime = Runtime.getRuntime()
+        val battery = collectBattery()
+        val storage = collectStorage()
+        val network = collectNetwork()
+        val packages = collectUserInstalledPackages()
+        val agentVersion = try {
+            context.packageManager
+                .getPackageInfo(context.packageName, 0)
+                .versionName ?: "?"
+        } catch (_: Exception) {
+            "?"
+        }
+
         return CommandResult(
             ok = true,
             detail = buildJsonObject {
@@ -59,12 +80,33 @@ class CommandExecutor(private val context: Context) {
                 put("device", Build.DEVICE)
                 put("androidVersion", Build.VERSION.RELEASE)
                 put("sdkInt", Build.VERSION.SDK_INT)
+                put("agentVersion", agentVersion)
                 put("uptimeMillis", SystemClock.uptimeMillis())
+                put(
+                    "accessibilityEnabled",
+                    AgentAccessibilityService.isEnabled() ||
+                        AgentAccessibilityService.isEnabledInSettings(context),
+                )
                 put("freeMemBytes", runtime.freeMemory())
                 put("totalMemBytes", runtime.totalMemory())
                 put("maxMemBytes", runtime.maxMemory())
+                putJsonObject("battery") {
+                    put("levelPercent", battery.levelPercent)
+                    put("isCharging", battery.isCharging)
+                }
+                putJsonObject("storage") {
+                    put("freeBytes", storage.freeBytes)
+                    put("totalBytes", storage.totalBytes)
+                }
+                putJsonObject("network") {
+                    put("connected", network.connected)
+                    put("transport", network.transport)
+                }
+                putJsonArray("installedPackages") {
+                    packages.forEach { add(it) }
+                }
             },
-            summary = "${Build.MANUFACTURER} ${Build.MODEL}, Android ${Build.VERSION.RELEASE}",
+            summary = "${Build.MANUFACTURER} ${Build.MODEL}, Android ${Build.VERSION.RELEASE}, ${packages.size} user apps",
         )
     }
 
@@ -72,7 +114,10 @@ class CommandExecutor(private val context: Context) {
         val packageName = payload["package"]?.jsonPrimitive?.contentOrNull
             ?: return failure("missing 'package' field")
         val intent = context.packageManager.getLaunchIntentForPackage(packageName)
-            ?: return failure("package not installed: $packageName")
+            ?: return failure(
+                "package not installed: $packageName " +
+                "(run FETCH_DIAGNOSTICS to see installed package names)",
+            )
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         context.startActivity(intent)
         return CommandResult(
@@ -102,4 +147,79 @@ class CommandExecutor(private val context: Context) {
         detail = buildJsonObject { put("error", message) },
         summary = message,
     )
+
+    // ------------------------- Diagnostics helpers -------------------------
+
+    private data class BatteryStats(val levelPercent: Int, val isCharging: Boolean)
+    private data class StorageStats(val freeBytes: Long, val totalBytes: Long)
+    private data class NetworkStats(val connected: Boolean, val transport: String)
+
+    private fun collectBattery(): BatteryStats {
+        return try {
+            val bm = context.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
+            BatteryStats(
+                levelPercent = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY),
+                isCharging = bm.isCharging,
+            )
+        } catch (_: Exception) {
+            BatteryStats(-1, false)
+        }
+    }
+
+    private fun collectStorage(): StorageStats {
+        return try {
+            val dir = Environment.getDataDirectory()
+            StorageStats(freeBytes = dir.freeSpace, totalBytes = dir.totalSpace)
+        } catch (_: Exception) {
+            StorageStats(-1, -1)
+        }
+    }
+
+    private fun collectNetwork(): NetworkStats {
+        return try {
+            val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            val active = cm.activeNetwork ?: return NetworkStats(false, "none")
+            val caps = cm.getNetworkCapabilities(active) ?: return NetworkStats(false, "none")
+            val transport = when {
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "cellular"
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "ethernet"
+                else -> "other"
+            }
+            NetworkStats(connected = true, transport = transport)
+        } catch (_: Exception) {
+            NetworkStats(false, "unknown")
+        }
+    }
+
+    /**
+     * List the user-installed (non-system) packages, sorted alphabetically.
+     * Useful for OPEN_APP/RESTART_APP -- the operator can run
+     * FETCH_DIAGNOSTICS once to learn the exact package name of Toast POS
+     * or whatever they want to act on, then send the right command.
+     *
+     * Requires QUERY_ALL_PACKAGES permission on Android 11+ (in manifest).
+     * Returns an empty list on failure rather than throwing -- diagnostics
+     * is best-effort.
+     */
+    private fun collectUserInstalledPackages(): List<String> {
+        return try {
+            val pm = context.packageManager
+            @Suppress("DEPRECATION")
+            val apps = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                pm.getInstalledApplications(
+                    PackageManager.ApplicationInfoFlags.of(0L),
+                )
+            } else {
+                pm.getInstalledApplications(0)
+            }
+            apps.asSequence()
+                .filter { (it.flags and ApplicationInfo.FLAG_SYSTEM) == 0 }
+                .map { it.packageName }
+                .sorted()
+                .toList()
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
 }

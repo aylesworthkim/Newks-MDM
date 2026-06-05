@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   Check,
+  ChevronDown,
+  ChevronRight,
   Monitor,
   Pencil,
   RefreshCw,
@@ -519,6 +521,9 @@ function DeviceDetail({ device, onCleared }: DeviceDetailProps) {
   const [issueError, setIssueError] = useState<string | null>(null);
   const [startingSession, setStartingSession] = useState(false);
   const [sessionError, setSessionError] = useState<string | null>(null);
+  // Which row is expanded showing its full payload/result. Only one open
+  // at a time keeps the panel compact.
+  const [expandedCmdId, setExpandedCmdId] = useState<string | null>(null);
 
   const canEdit = user?.role === 'admin' || user?.role === 'support';
   const needsPackage = commandType === 'OPEN_APP' || commandType === 'RESTART_APP';
@@ -537,8 +542,28 @@ function DeviceDetail({ device, onCleared }: DeviceDetailProps) {
 
   useEffect(() => {
     setCommands(null);
+    setExpandedCmdId(null);
     loadHistory();
   }, [loadHistory]);
+
+  // Live polling: if a recent command is still queued or dispatched, re-fetch
+  // the history every ~1.5s so the status pill updates without manual refresh.
+  // Self-stops once everything resolves OR the command is older than 60s
+  // (otherwise a permanently-stuck dispatched command would hammer the API).
+  useEffect(() => {
+    if (!commands) return;
+    const cutoff = Date.now() - 60_000;
+    const hasRecentPending = commands.some(
+      (c) =>
+        (c.status === 'queued' || c.status === 'dispatched') &&
+        new Date(c.requested_at).getTime() > cutoff,
+    );
+    if (!hasRecentPending) return;
+    const t = setTimeout(() => {
+      loadHistory();
+    }, 1500);
+    return () => clearTimeout(t);
+  }, [commands, loadHistory]);
 
   async function startSession() {
     setSessionError(null);
@@ -720,6 +745,12 @@ function DeviceDetail({ device, onCleared }: DeviceDetailProps) {
         </section>
       )}
 
+      {/* Expanded-row inline detail. Renders the request payload + result
+          JSON for inspection. Diagnostics specifically gets a slightly
+          nicer formatted view since installedPackages is a wall of text
+          when raw-dumped. */}
+      {/* (CommandDetailExpanded component definition is below
+          DeviceDetail; this comment is just a placement marker.) */}
       <section className="detail-section">
         <h4>Recent commands</h4>
         {historyError && <div className="error-text">{historyError}</div>}
@@ -733,19 +764,42 @@ function DeviceDetail({ device, onCleared }: DeviceDetailProps) {
           <table className="compact-table">
             <thead>
               <tr>
+                <th style={{ width: 18 }}></th>
                 <th>When</th>
                 <th>Type</th>
                 <th>Status</th>
               </tr>
             </thead>
             <tbody>
-              {commands.slice(0, 10).map((c) => (
-                <tr key={c.id}>
-                  <td>{new Date(c.requested_at).toLocaleString()}</td>
-                  <td><code>{c.command_type}</code></td>
-                  <td>{c.status}</td>
-                </tr>
-              ))}
+              {commands.slice(0, 10).map((c) => {
+                const expanded = expandedCmdId === c.id;
+                return (
+                  <Fragment key={c.id}>
+                    <tr
+                      className="cmd-row"
+                      onClick={() => setExpandedCmdId(expanded ? null : c.id)}
+                    >
+                      <td>
+                        {expanded
+                          ? <ChevronDown size={12} className="muted" />
+                          : <ChevronRight size={12} className="muted" />}
+                      </td>
+                      <td>{new Date(c.requested_at).toLocaleString()}</td>
+                      <td><code>{c.command_type}</code></td>
+                      <td>
+                        <span className={`cmd-status ${c.status}`}>{c.status}</span>
+                      </td>
+                    </tr>
+                    {expanded && (
+                      <tr className="cmd-detail-row">
+                        <td colSpan={4}>
+                          <CommandDetailExpanded command={c} />
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
             </tbody>
           </table>
         )}
@@ -753,4 +807,128 @@ function DeviceDetail({ device, onCleared }: DeviceDetailProps) {
 
     </div>
   );
+}
+
+// -----------------------------------------------------------------------------
+// Expanded command detail. Renders the request payload + result JSON inline.
+// FETCH_DIAGNOSTICS gets a slightly nicer formatted view since the raw JSON
+// of installedPackages is a wall of text.
+
+function CommandDetailExpanded({ command }: { command: CommandRow }) {
+  const payloadHasContent = command.payload && Object.keys(command.payload).length > 0;
+  const isDiagnostics = command.command_type === 'FETCH_DIAGNOSTICS' && command.result;
+
+  return (
+    <div className="cmd-detail">
+      {payloadHasContent && (
+        <div className="cmd-detail-block">
+          <div className="cmd-detail-label">Request payload</div>
+          <pre>{JSON.stringify(command.payload, null, 2)}</pre>
+        </div>
+      )}
+
+      {command.result && isDiagnostics ? (
+        <DiagnosticsResultView result={command.result} />
+      ) : command.result ? (
+        <div className="cmd-detail-block">
+          <div className="cmd-detail-label">Result</div>
+          <pre>{JSON.stringify(command.result, null, 2)}</pre>
+        </div>
+      ) : null}
+
+      <div className="cmd-detail-meta">
+        {command.requested_by_username && (
+          <span>by {command.requested_by_username}</span>
+        )}
+        {command.dispatched_at && (
+          <span>dispatched {new Date(command.dispatched_at).toLocaleTimeString()}</span>
+        )}
+        {command.completed_at && (
+          <span>completed {new Date(command.completed_at).toLocaleTimeString()}</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Friendlier rendering for FETCH_DIAGNOSTICS specifically. Pulls out the
+// well-known keys we send from the agent and shows the installed-packages
+// list in a scrollable box. Falls back to raw JSON for anything unexpected.
+function DiagnosticsResultView({ result }: { result: Record<string, unknown> }) {
+  const known: Array<[string, string]> = [];
+  const push = (label: string, val: unknown) => {
+    if (val === undefined || val === null) return;
+    known.push([label, String(val)]);
+  };
+
+  push('Manufacturer', result.manufacturer);
+  push('Model', result.model);
+  push('Device', result.device);
+  push('Android', result.androidVersion);
+  push('SDK', result.sdkInt);
+  push('Agent version', result.agentVersion);
+  push('Accessibility enabled', result.accessibilityEnabled);
+
+  const battery = result.battery as Record<string, unknown> | undefined;
+  if (battery) {
+    push(
+      'Battery',
+      `${battery.levelPercent}%${battery.isCharging ? ' (charging)' : ''}`,
+    );
+  }
+  const storage = result.storage as Record<string, unknown> | undefined;
+  if (storage) {
+    const free = typeof storage.freeBytes === 'number' ? storage.freeBytes : -1;
+    const total = typeof storage.totalBytes === 'number' ? storage.totalBytes : -1;
+    if (free >= 0 && total >= 0) {
+      push('Storage', `${fmtGB(free)} free of ${fmtGB(total)}`);
+    }
+  }
+  const network = result.network as Record<string, unknown> | undefined;
+  if (network) {
+    push(
+      'Network',
+      network.connected ? String(network.transport) : 'disconnected',
+    );
+  }
+  const freeMem = result.freeMemBytes as number | undefined;
+  const maxMem = result.maxMemBytes as number | undefined;
+  if (typeof freeMem === 'number' && typeof maxMem === 'number') {
+    push('Memory (process)', `${fmtMB(freeMem)} free of ${fmtMB(maxMem)} max`);
+  }
+
+  const pkgs = Array.isArray(result.installedPackages)
+    ? (result.installedPackages as string[])
+    : [];
+
+  return (
+    <div className="cmd-detail-block">
+      <div className="cmd-detail-label">Diagnostics</div>
+      <dl className="diag-dl">
+        {known.map(([k, v]) => (
+          <Fragment key={k}>
+            <dt>{k}</dt>
+            <dd>{v}</dd>
+          </Fragment>
+        ))}
+      </dl>
+      {pkgs.length > 0 && (
+        <div style={{ marginTop: 8 }}>
+          <div className="cmd-detail-label" style={{ fontSize: 11 }}>
+            Installed apps ({pkgs.length})
+          </div>
+          <div className="diag-pkgs">
+            {pkgs.map((p) => <code key={p}>{p}</code>)}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function fmtMB(n: number): string {
+  return `${(n / 1024 / 1024).toFixed(0)} MB`;
+}
+function fmtGB(n: number): string {
+  return `${(n / 1024 / 1024 / 1024).toFixed(1)} GB`;
 }
