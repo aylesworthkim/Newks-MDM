@@ -5,7 +5,6 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
@@ -45,41 +44,64 @@ class AgentUpdater(private val context: Context) {
     private val json = Json { ignoreUnknownKeys = true }
 
     /**
-     * Hits the version endpoint, compares, downloads + prompts if newer.
-     * Safe to call from a coroutine; runs the network calls on IO.
-     * Silent on failure -- next call will retry.
+     * Result of a single update-check attempt. Returned from [checkAndPrompt]
+     * so callers (notably the CHECK_FOR_UPDATE command handler) can surface
+     * the outcome back to the portal instead of guessing.
      */
-    suspend fun checkAndPrompt(backendUrl: String) {
-        if (backendUrl.isBlank()) return
-        withContext(Dispatchers.IO) {
+    sealed class UpdateCheckResult {
+        data class UpToDate(val currentVersionCode: Int, val latestVersionCode: Int) : UpdateCheckResult()
+        data class NewerAvailable(val info: AgentVersionInfo, val notificationPosted: Boolean) : UpdateCheckResult()
+        data class Failed(val reason: String) : UpdateCheckResult()
+    }
+
+    /**
+     * Hits the version endpoint, compares, downloads + prompts if newer.
+     * Safe to call from a coroutine; runs the network calls on IO. Always
+     * returns an [UpdateCheckResult] so callers can report status; AgentLog
+     * also captures the same information for retrieval via FETCH_DIAGNOSTICS.
+     */
+    suspend fun checkAndPrompt(backendUrl: String): UpdateCheckResult {
+        if (backendUrl.isBlank()) {
+            return UpdateCheckResult.Failed("backendUrl is blank")
+        }
+        return withContext(Dispatchers.IO) {
+            val infoUrl = backendUrl.trimEnd('/') + VERSION_PATH
+            AgentLog.d(TAG, "checking for update at $infoUrl")
             try {
-                val infoUrl = backendUrl.trimEnd('/') + VERSION_PATH
                 val infoReq = Request.Builder().url(infoUrl).build()
-                val infoResp = client.newCall(infoReq).execute()
-                infoResp.use { r ->
+                client.newCall(infoReq).execute().use { r ->
                     if (!r.isSuccessful) {
-                        Log.w(TAG, "version check failed: HTTP ${r.code}")
-                        return@withContext
+                        val msg = "version check failed: HTTP ${r.code}"
+                        AgentLog.w(TAG, msg)
+                        return@withContext UpdateCheckResult.Failed(msg)
                     }
-                    val body = r.body?.string() ?: return@withContext
+                    val body = r.body?.string()
+                    if (body.isNullOrEmpty()) {
+                        AgentLog.w(TAG, "version check returned empty body")
+                        return@withContext UpdateCheckResult.Failed("empty body from $infoUrl")
+                    }
                     val info = json.decodeFromString(AgentVersionInfo.serializer(), body)
 
                     val current = currentVersionCode()
                     if (info.versionCode <= current) {
-                        Log.d(TAG, "agent up to date (current=$current, latest=${info.versionCode})")
-                        return@withContext
+                        AgentLog.d(TAG, "agent up to date (current=$current, latest=${info.versionCode})")
+                        return@withContext UpdateCheckResult.UpToDate(current, info.versionCode)
                     }
 
-                    Log.d(TAG, "newer agent available: ${info.versionName} (code ${info.versionCode})")
-                    downloadAndPrompt(backendUrl, info)
+                    AgentLog.d(TAG, "newer agent available: ${info.versionName} (code ${info.versionCode})")
+                    val posted = downloadAndPrompt(backendUrl, info)
+                    return@withContext UpdateCheckResult.NewerAvailable(info, posted)
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "update check failed", e)
+                AgentLog.w(TAG, "update check failed", e)
+                return@withContext UpdateCheckResult.Failed(
+                    "${e.javaClass.simpleName}: ${e.message ?: "no message"}",
+                )
             }
         }
     }
 
-    private fun currentVersionCode(): Int {
+    fun currentVersionCode(): Int {
         return try {
             val info = context.packageManager.getPackageInfo(context.packageName, 0)
             @Suppress("DEPRECATION")
@@ -89,12 +111,17 @@ class AgentUpdater(private val context: Context) {
                 info.versionCode
             }
         } catch (e: Exception) {
-            Log.w(TAG, "currentVersionCode failed", e)
+            AgentLog.w(TAG, "currentVersionCode failed", e)
             0
         }
     }
 
-    private fun downloadAndPrompt(backendUrl: String, info: AgentVersionInfo) {
+    /**
+     * Downloads the APK (if not already cached) and posts the install-prompt
+     * notification. Returns true if a notification was posted, false on any
+     * failure along the way.
+     */
+    private fun downloadAndPrompt(backendUrl: String, info: AgentVersionInfo): Boolean {
         val absUrl = if (info.downloadUrl.startsWith("http")) info.downloadUrl
         else backendUrl.trimEnd('/') + info.downloadUrl
 
@@ -102,25 +129,31 @@ class AgentUpdater(private val context: Context) {
         // Skip the download if we already have this exact version cached
         // (e.g., the user dismissed the notification last time without installing).
         if (!apkFile.exists() || apkFile.length() == 0L) {
+            AgentLog.d(TAG, "downloading APK from $absUrl")
             val dlReq = Request.Builder().url(absUrl).build()
             client.newCall(dlReq).execute().use { resp ->
                 if (!resp.isSuccessful) {
-                    Log.w(TAG, "APK download failed: HTTP ${resp.code}")
-                    return
+                    AgentLog.w(TAG, "APK download failed: HTTP ${resp.code}")
+                    return false
                 }
-                resp.body?.byteStream()?.use { input ->
+                val body = resp.body
+                if (body == null) {
+                    AgentLog.w(TAG, "APK download response had no body")
+                    return false
+                }
+                body.byteStream().use { input ->
                     apkFile.outputStream().use { output ->
                         input.copyTo(output)
                     }
-                } ?: run {
-                    Log.w(TAG, "APK download response had no body")
-                    return
                 }
             }
-            Log.d(TAG, "downloaded ${apkFile.length()} bytes to ${apkFile.path}")
+            AgentLog.d(TAG, "downloaded ${apkFile.length()} bytes to ${apkFile.path}")
+        } else {
+            AgentLog.d(TAG, "APK for v${info.versionCode} already cached at ${apkFile.path}")
         }
 
         postUpdateNotification(info, apkFile)
+        return true
     }
 
     private fun postUpdateNotification(info: AgentVersionInfo, apkFile: File) {
@@ -165,7 +198,7 @@ class AgentUpdater(private val context: Context) {
 
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         nm.notify(NOTIFICATION_ID, notification)
-        Log.d(TAG, "posted update notification for v${info.versionName}")
+        AgentLog.d(TAG, "posted update notification for v${info.versionName}")
     }
 
     private fun ensureNotificationChannel() {

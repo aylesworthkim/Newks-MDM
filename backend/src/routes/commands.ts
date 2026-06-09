@@ -45,6 +45,14 @@ const issueCommandSchema = z.discriminatedUnion('commandType', [
     commandType: z.literal('RESTART_APP'),
     payload: z.object({ package: z.string().min(1).max(256) }).strict(),
   }),
+  // v0.7.2+: force the in-app updater to run on demand. Lets support staff
+  // verify that the agent can reach /agent-version.json and see the
+  // outcome (up_to_date / newer_available / failed) without waiting for
+  // the next service-start poll.
+  z.object({
+    commandType: z.literal('CHECK_FOR_UPDATE'),
+    payload: z.object({}).strict().optional(),
+  }),
 ]);
 
 interface CommandRow {

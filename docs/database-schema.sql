@@ -55,7 +55,8 @@ CREATE TABLE IF NOT EXISTS commands (
                     'PING',
                     'FETCH_DIAGNOSTICS',
                     'OPEN_APP',
-                    'RESTART_APP'
+                    'RESTART_APP',
+                    'CHECK_FOR_UPDATE'
                   )),
   payload       JSONB NOT NULL DEFAULT '{}'::jsonb,              -- e.g. { "package": "com.newks.pos" }
   status        TEXT NOT NULL DEFAULT 'queued'

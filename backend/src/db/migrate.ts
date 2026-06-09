@@ -79,4 +79,26 @@ export async function runMigrations(): Promise<void> {
      WHERE d.location_id = g.name
        AND d.group_id IS NULL
   `);
+
+  // v0.7.2+: agent gained a CHECK_FOR_UPDATE command so support staff can
+  // force the in-app updater to run on demand without waiting for the next
+  // HeartbeatService start. Extend the commands.command_type CHECK
+  // constraint to allow the new value. We have to DROP + CREATE because
+  // Postgres CHECK constraints aren't extendable in place. The constraint
+  // name follows Postgres's default naming for table-level CHECK
+  // constraints (commands_command_type_check); if it was named differently
+  // on an existing install we tolerate the missing-constraint error.
+  await query(`
+    ALTER TABLE commands DROP CONSTRAINT IF EXISTS commands_command_type_check
+  `);
+  await query(`
+    ALTER TABLE commands ADD CONSTRAINT commands_command_type_check
+      CHECK (command_type IN (
+        'PING',
+        'FETCH_DIAGNOSTICS',
+        'OPEN_APP',
+        'RESTART_APP',
+        'CHECK_FOR_UPDATE'
+      ))
+  `);
 }

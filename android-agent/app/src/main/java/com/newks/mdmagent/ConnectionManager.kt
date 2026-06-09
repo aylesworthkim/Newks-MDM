@@ -75,13 +75,13 @@ class ConnectionManager private constructor(
         if (wsClient != null) return
 
         val wsUrl = httpToWs(backendUrl).trimEnd('/') + "/ws"
-        Log.d(TAG, "connecting to $wsUrl as $deviceId")
+        AgentLog.d(TAG, "connecting to $wsUrl as $deviceId")
         _connectionState.value = ConnectionState.CONNECTING
         wsClient = WsClient(wsUrl, this).also { it.connect() }
     }
 
     fun stop() {
-        Log.d(TAG, "stopping connection")
+        AgentLog.d(TAG, "stopping connection")
         heartbeatJob?.cancel()
         heartbeatJob = null
         reconnectJob?.cancel()
@@ -172,7 +172,7 @@ class ConnectionManager private constructor(
 
     override fun onMessage(payload: JsonObject) {
         when (payload["type"]?.jsonPrimitive?.contentOrNull) {
-            "WELCOME" -> Log.d(TAG, "welcomed by server")
+            "WELCOME" -> AgentLog.d(TAG, "welcomed by server")
             "COMMAND" -> handleCommand(payload)
             "START_SESSION" -> handleStartSession(payload)
             "STOP_SESSION" -> handleStopSession(payload)
@@ -180,7 +180,7 @@ class ConnectionManager private constructor(
             "INPUT_SWIPE" -> handleInputSwipe(payload)
             "INPUT_KEY" -> handleInputKey(payload)
             "INPUT_PASTE" -> handleInputPaste(payload)
-            "ERROR" -> Log.w(TAG, "server error: ${payload["message"]}")
+            "ERROR" -> AgentLog.w(TAG, "server error: ${payload["message"]}")
         }
     }
 
@@ -205,7 +205,7 @@ class ConnectionManager private constructor(
 
         if (config.state.value.deviceId == null) return
 
-        Log.d(TAG, "reconnecting in ${delay}ms")
+        AgentLog.d(TAG, "reconnecting in ${delay}ms")
         reconnectJob = scope.launch {
             delay(delay)
             if (isActive) start()
@@ -217,7 +217,7 @@ class ConnectionManager private constructor(
         val commandType = payload["commandType"]?.jsonPrimitive?.contentOrNull ?: return
         val cmdPayload = payload["payload"] as? JsonObject ?: JsonObject(emptyMap())
 
-        Log.d(TAG, "received command $commandType ($commandId)")
+        AgentLog.d(TAG, "received command $commandType ($commandId)")
         appendLog(CommandLogEntry(
             commandId = commandId,
             commandType = commandType,

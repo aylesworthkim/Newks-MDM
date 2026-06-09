@@ -20,9 +20,9 @@ import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 
 /**
- * Carries out the four allowlisted command types we accept. NEW COMMAND
- * TYPES MUST BE ADDED HERE, in the backend zod schema, AND in the database
- * CHECK constraint -- all three layers must agree (see commands.ts).
+ * Carries out the allowlisted command types we accept. NEW COMMAND TYPES
+ * MUST BE ADDED HERE, in the backend zod schema, AND in the database CHECK
+ * constraint -- all three layers must agree (see commands.ts).
  *
  * Returns a [CommandResult] regardless of outcome; the caller forwards
  * `ok` + `detail` back to the server as a COMMAND_RESULT message.
@@ -35,13 +35,20 @@ data class CommandResult(
 
 class CommandExecutor(private val context: Context) {
 
-    fun execute(commandType: String, payload: JsonObject): CommandResult {
+    /**
+     * Suspending because CHECK_FOR_UPDATE has to do a network round-trip
+     * to the backend's /agent-version.json endpoint before it can answer.
+     * The other commands are synchronous but the whole entry point is
+     * suspend to keep the call site uniform.
+     */
+    suspend fun execute(commandType: String, payload: JsonObject): CommandResult {
         return try {
             when (commandType) {
                 "PING" -> ping()
                 "FETCH_DIAGNOSTICS" -> diagnostics()
                 "OPEN_APP" -> openApp(payload)
                 "RESTART_APP" -> restartApp(payload)
+                "CHECK_FOR_UPDATE" -> checkForUpdate()
                 else -> failure("unknown command type: $commandType")
             }
         } catch (e: Exception) {
@@ -71,6 +78,12 @@ class CommandExecutor(private val context: Context) {
         } catch (_: Exception) {
             "?"
         }
+        // v0.7.2+: ship recent agent log lines as part of diagnostics so
+        // support staff can see why the updater or session subsystem is
+        // misbehaving without having to plug in adb. Capped at 80 entries
+        // to keep the payload reasonable; AgentLog holds up to 200 in
+        // memory if we ever raise the cap.
+        val recentLogs = AgentLog.snapshot(limit = 80)
 
         return CommandResult(
             ok = true,
@@ -105,9 +118,55 @@ class CommandExecutor(private val context: Context) {
                 putJsonArray("installedPackages") {
                     packages.forEach { add(it) }
                 }
+                putJsonArray("recentLogs") {
+                    recentLogs.forEach { add(it) }
+                }
             },
-            summary = "${Build.MANUFACTURER} ${Build.MODEL}, Android ${Build.VERSION.RELEASE}, ${packages.size} user apps",
+            summary = "${Build.MANUFACTURER} ${Build.MODEL}, Android ${Build.VERSION.RELEASE}, ${packages.size} user apps, ${recentLogs.size} log lines",
         )
+    }
+
+    /**
+     * Force an immediate update check against /agent-version.json and
+     * report the result. Lets support staff trigger and observe the
+     * updater on demand instead of relying on the periodic check that
+     * runs on every HeartbeatService start.
+     */
+    private suspend fun checkForUpdate(): CommandResult {
+        val config = AgentConfig(context)
+        val backendUrl = config.state.value.backendUrl
+        if (backendUrl.isBlank()) {
+            return failure("agent not enrolled; no backend URL configured")
+        }
+        val result = AgentUpdater(context).checkAndPrompt(backendUrl)
+        val currentCode = AgentUpdater(context).currentVersionCode()
+        return when (result) {
+            is AgentUpdater.UpdateCheckResult.UpToDate -> CommandResult(
+                ok = true,
+                detail = buildJsonObject {
+                    put("status", "up_to_date")
+                    put("currentVersionCode", result.currentVersionCode)
+                    put("latestVersionCode", result.latestVersionCode)
+                },
+                summary = "up to date (code ${result.currentVersionCode})",
+            )
+            is AgentUpdater.UpdateCheckResult.NewerAvailable -> CommandResult(
+                ok = true,
+                detail = buildJsonObject {
+                    put("status", "newer_available")
+                    put("currentVersionCode", currentCode)
+                    put("latestVersionCode", result.info.versionCode)
+                    put("latestVersionName", result.info.versionName)
+                    put("notificationPosted", result.notificationPosted)
+                    result.info.releaseNotes?.let { put("releaseNotes", it) }
+                },
+                summary = if (result.notificationPosted)
+                    "newer version ${result.info.versionName} ready: notification posted"
+                else
+                    "newer version ${result.info.versionName} found but download/notify failed",
+            )
+            is AgentUpdater.UpdateCheckResult.Failed -> failure("update check failed: ${result.reason}")
+        }
     }
 
     private fun openApp(payload: JsonObject): CommandResult {

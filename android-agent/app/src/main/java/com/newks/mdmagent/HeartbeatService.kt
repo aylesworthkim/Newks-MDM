@@ -65,14 +65,17 @@ class HeartbeatService : Service() {
         // v0.7.0+: check for a newer agent version and prompt to install
         // if one is available. Runs on every service start (boot, app
         // open, system-restart) which gives us roughly daily checks in
-        // typical store usage. Silent fail-safe -- if the backend is
-        // unreachable or the JSON parse fails, the user sees nothing and
-        // we retry next time.
+        // typical store usage. v0.7.2+: outcome is recorded via AgentLog
+        // so support staff can retrieve it via FETCH_DIAGNOSTICS even
+        // when the silent path was taken (e.g. up-to-date or network error).
         val backendUrl = config.state.value.backendUrl
         if (config.state.value.deviceId != null && backendUrl.isNotBlank()) {
             scope.launch {
-                AgentUpdater(applicationContext).checkAndPrompt(backendUrl)
+                val result = AgentUpdater(applicationContext).checkAndPrompt(backendUrl)
+                AgentLog.d(TAG, "boot/onStart update check returned: $result")
             }
+        } else {
+            AgentLog.d(TAG, "skipping update check (not enrolled or blank backendUrl)")
         }
 
         return START_STICKY

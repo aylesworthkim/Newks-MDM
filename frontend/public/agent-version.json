@@ -1,6 +1,6 @@
 {
-  "versionCode": 10,
-  "versionName": "0.7.1",
+  "versionCode": 11,
+  "versionName": "0.7.2",
   "downloadUrl": "/agent.apk",
-  "releaseNotes": "Production-ready enrollment defaults: backend URL pre-filled to the live Cloudways host so store managers don't retype it."
+  "releaseNotes": "Self-diagnostic visibility: in-memory log buffer surfaced via FETCH_DIAGNOSTICS, plus a new CHECK_FOR_UPDATE command so support staff can trigger the updater on demand and see why it succeeded or failed."
 }
