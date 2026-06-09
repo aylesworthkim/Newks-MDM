@@ -3,7 +3,10 @@ package com.newks.mdmagent
 import android.accessibilityservice.AccessibilityService.GestureResultCallback
 import android.accessibilityservice.GestureDescription
 import android.content.Context
+import android.os.Build
+import android.util.DisplayMetrics
 import android.util.Log
+import android.view.WindowManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -262,9 +265,17 @@ class ConnectionManager private constructor(
             return
         }
 
-        val metrics = appContext.resources.displayMetrics
-        val pxX = (x.coerceIn(0f, 1f)) * metrics.widthPixels
-        val pxY = (y.coerceIn(0f, 1f)) * metrics.heightPixels
+        // Use the FULL physical display size (including status bar + nav bar),
+        // not Resources.displayMetrics which excludes system insets. The
+        // accessibility screenshot we send to the browser captures the full
+        // physical display, so the proportional coordinates the browser sends
+        // back are relative to that. Multiplying by the smaller "usable area"
+        // metrics here would land taps systematically above their intended
+        // target -- especially noticeable on bottom-of-screen buttons like
+        // "Save" or anything near the nav bar.
+        val (fullW, fullH) = fullDisplaySize()
+        val pxX = x.coerceIn(0f, 1f) * fullW
+        val pxY = y.coerceIn(0f, 1f) * fullH
 
         AgentAccessibilityService.dispatchTap(pxX, pxY, object : GestureResultCallback() {
             override fun onCompleted(gestureDescription: GestureDescription?) {
@@ -289,9 +300,9 @@ class ConnectionManager private constructor(
             return
         }
 
-        val metrics = appContext.resources.displayMetrics
-        val w = metrics.widthPixels.toFloat()
-        val h = metrics.heightPixels.toFloat()
+        val (fullW, fullH) = fullDisplaySize()
+        val w = fullW.toFloat()
+        val h = fullH.toFloat()
         AgentAccessibilityService.dispatchSwipe(
             fromXPx = fromX.coerceIn(0f, 1f) * w,
             fromYPx = fromY.coerceIn(0f, 1f) * h,
@@ -330,6 +341,40 @@ class ConnectionManager private constructor(
     private fun httpToWs(url: String): String = url
         .replaceFirst("https://", "wss://")
         .replaceFirst("http://", "ws://")
+
+    /**
+     * Returns the full physical display size in pixels, INCLUDING system
+     * bars (status bar at top, navigation bar at bottom). This matches
+     * what AccessibilityService.takeScreenshot captures, and matches what
+     * AccessibilityService.dispatchGesture expects for coordinates --
+     * unlike Resources.displayMetrics which excludes system insets and
+     * would cause clicks near the screen edges to land off-target.
+     */
+    private fun fullDisplaySize(): Pair<Int, Int> {
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val wm = appContext.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+                val bounds = wm.maximumWindowMetrics.bounds
+                bounds.width() to bounds.height()
+            } else {
+                @Suppress("DEPRECATION")
+                val wm = appContext.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+                @Suppress("DEPRECATION")
+                val display = wm.defaultDisplay
+                val metrics = DisplayMetrics()
+                @Suppress("DEPRECATION")
+                display.getRealMetrics(metrics)
+                metrics.widthPixels to metrics.heightPixels
+            }
+        } catch (e: Exception) {
+            // Fall back to the smaller "usable area" metrics if WindowManager
+            // is somehow unavailable. Clicks may be slightly off-target but
+            // at least they won't crash.
+            Log.w(TAG, "fullDisplaySize failed; using displayMetrics fallback", e)
+            val metrics = appContext.resources.displayMetrics
+            metrics.widthPixels to metrics.heightPixels
+        }
+    }
 
     // Wire-format messages we send to the server.
     @Serializable
