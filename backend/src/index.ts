@@ -113,6 +113,18 @@ async function main(): Promise<void> {
   if (isProduction) {
     const distPath = findFrontendDist();
     if (distPath) {
+      // /agent-version.json: served WITHOUT caching. The in-app updater on
+      // every deployed tablet polls this endpoint to decide whether a newer
+      // APK is available. If Varnish (or any intermediary) caches a stale
+      // response, every tablet thinks it is already up to date and never
+      // shows the install prompt. no-store tells Varnish + browser to
+      // never cache; every request goes through to the file on disk.
+      app.get('/agent-version.json', (_req: Request, res: Response) => {
+        res.setHeader('Cache-Control', 'no-store, max-age=0');
+        res.setHeader('Pragma', 'no-cache');
+        res.sendFile(path.join(distPath, 'agent-version.json'));
+      });
+
       app.use(express.static(distPath, { maxAge: '1h', index: false }));
       app.get('*', (req: Request, res: Response, next: NextFunction) => {
         if (req.path.startsWith('/api/') || req.path.startsWith('/ws')) {
