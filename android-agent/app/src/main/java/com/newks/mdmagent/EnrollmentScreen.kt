@@ -37,11 +37,16 @@ import kotlinx.coroutines.launch
 fun EnrollmentScreen(serialNumber: String, config: AgentConfig) {
     val scope = rememberCoroutineScope()
 
-    // Sensible defaults from the previous session's test data, so re-running
-    // the app on a dev tablet doesn't require retyping the same values.
-    var backendUrl by remember { mutableStateOf("http://172.16.0.125:4000") }
-    var deviceName by remember { mutableStateOf("Test POS Tablet") }
-    var locationId by remember { mutableStateOf("demo-store") }
+    // Production defaults. Backend URL points at the live Cloudways
+    // deployment so store managers don't have to retype it during fleet
+    // enrollment. Device name + location are intentionally blank so they
+    // have to fill in something (per the Newk's naming convention:
+    // POS = "<site-id> - Terminal <#>", KDS = "<site-id> - KDS - <station>").
+    var backendUrl by remember {
+        mutableStateOf("https://phpstack-1474989-6419445.cloudwaysapps.com")
+    }
+    var deviceName by remember { mutableStateOf("") }
+    var locationId by remember { mutableStateOf("") }
     var enrollmentSecret by remember { mutableStateOf("") }
     var submitting by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
