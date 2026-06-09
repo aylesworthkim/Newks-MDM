@@ -5,6 +5,7 @@ import { AuthProvider, useAuth } from './lib/auth';
 import { Layout } from './components/Layout';
 import { LoginPage } from './pages/LoginPage';
 import { DevicesPage } from './pages/DevicesPage';
+import { GroupsPage } from './pages/GroupsPage';
 import { RemoteScreenPage } from './pages/RemoteScreenPage';
 import { UsersPage } from './pages/UsersPage';
 
@@ -29,6 +30,7 @@ function LayoutRoutes() {
           <Route path="/" element={<Navigate to="/devices" replace />} />
           <Route path="/devices" element={<DevicesPage />} />
           <Route path="/devices/:id" element={<DevicesPage />} />
+          <Route path="/groups" element={<GroupsPage />} />
           <Route path="/users" element={<UsersPage />} />
           <Route path="*" element={<Navigate to="/devices" replace />} />
         </Routes>
