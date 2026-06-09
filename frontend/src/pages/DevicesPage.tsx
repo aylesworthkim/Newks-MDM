@@ -9,6 +9,7 @@ import {
   RefreshCw,
   Search,
   Send,
+  Trash2,
   X,
 } from 'lucide-react';
 
@@ -29,6 +30,17 @@ interface Device {
   last_heartbeat_at: string | null;
   consent_armed: boolean;
   accessibility_enabled: boolean;
+  // Group is the new first-class organizing entity. Devices that enrolled
+  // before the Groups migration may have location_id but no group_id; the
+  // table grouping logic falls back to location_id in that case.
+  group_id: string | null;
+  group_name: string | null;
+}
+
+interface Group {
+  id: string;
+  name: string;
+  device_count: number;
 }
 
 // Shape of GET /api/devices/:id/commands
@@ -51,7 +63,10 @@ const UNASSIGNED = '__unassigned__';
 
 interface EditDraft {
   device_name: string;
-  location_id: string;
+  // Either an existing group_id, the sentinel "" for Unassigned, or the
+  // sentinel "__new__" while the user is typing a new group name inline.
+  group_id: string;
+  new_group_name: string;
 }
 
 function readinessFor(d: Device): { label: string; tone: 'ok' | 'warn' | 'off'; tooltip: string } {
@@ -87,15 +102,25 @@ function readinessFor(d: Device): { label: string; tone: 'ok' | 'warn' | 'off'; 
 export function DevicesPage() {
   const { id: selectedId } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
 
   const [devices, setDevices] = useState<Device[] | null>(null);
+  const [groups, setGroups] = useState<Group[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [query, setQuery] = useState('');
 
   // Inline edit state -- only one row at a time.
   const [editingDeviceId, setEditingDeviceId] = useState<string | null>(null);
-  const [editDraft, setEditDraft] = useState<EditDraft>({ device_name: '', location_id: '' });
+  const [editDraft, setEditDraft] = useState<EditDraft>({
+    device_name: '',
+    group_id: '',
+    new_group_name: '',
+  });
+  // Group-header rename: holds the group being renamed (real group_id) and
+  // the in-progress name. The Unassigned bucket can't be renamed (it's a
+  // synthetic UI grouping for devices without a group_id).
   const [editingGroupKey, setEditingGroupKey] = useState<string | null>(null);
   const [groupDraft, setGroupDraft] = useState('');
   const [saving, setSaving] = useState(false);
@@ -105,8 +130,14 @@ export function DevicesPage() {
     setRefreshing(true);
     setError(null);
     try {
-      const response = await api<{ devices: Device[] }>('/api/devices');
-      setDevices(response.devices);
+      // Devices and groups in parallel so the row-edit dropdown has the
+      // group list ready by the time someone clicks Edit.
+      const [devicesResp, groupsResp] = await Promise.all([
+        api<{ devices: Device[] }>('/api/devices'),
+        api<{ groups: Group[] }>('/api/groups'),
+      ]);
+      setDevices(devicesResp.devices);
+      setGroups(groupsResp.groups);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'failed to load devices');
     } finally {
@@ -118,7 +149,22 @@ export function DevicesPage() {
     load();
   }, [load]);
 
-  const groups = useMemo(() => {
+  // Reload groups only (cheaper than full reload after group mutations).
+  const reloadGroups = useCallback(async () => {
+    try {
+      const groupsResp = await api<{ groups: Group[] }>('/api/groups');
+      setGroups(groupsResp.groups);
+    } catch {
+      // Non-fatal -- next full reload will catch up.
+    }
+  }, []);
+
+  // Bucket devices into [groupKey, devices] entries for rendering. Group
+  // key is the group_id for assigned devices, UNASSIGNED for the rest.
+  // Group display name comes from group_name (new schema) or location_id
+  // (legacy devices that pre-date the migration). The Unassigned bucket
+  // sorts to the bottom.
+  const groupedDevices = useMemo(() => {
     if (!devices) return null;
     const q = query.trim().toLowerCase();
     const filtered = q
@@ -126,24 +172,25 @@ export function DevicesPage() {
           (d) =>
             d.device_name.toLowerCase().includes(q) ||
             d.serial_number.toLowerCase().includes(q) ||
-            (d.location_id ?? '').toLowerCase().includes(q),
+            (d.group_name ?? d.location_id ?? '').toLowerCase().includes(q),
         )
       : devices;
-    const byStore = new Map<string, Device[]>();
+    const buckets = new Map<string, { name: string; devices: Device[] }>();
     for (const d of filtered) {
-      const key = d.location_id && d.location_id.trim() !== '' ? d.location_id : UNASSIGNED;
-      const list = byStore.get(key) ?? [];
-      list.push(d);
-      byStore.set(key, list);
+      const key = d.group_id ?? UNASSIGNED;
+      const name = d.group_name ?? d.location_id ?? 'Unassigned';
+      const existing = buckets.get(key);
+      if (existing) existing.devices.push(d);
+      else buckets.set(key, { name, devices: [d] });
     }
-    return Array.from(byStore.entries()).sort(([a], [b]) => {
-      if (a === UNASSIGNED) return 1;
-      if (b === UNASSIGNED) return -1;
-      return a.localeCompare(b);
+    return Array.from(buckets.entries()).sort(([keyA, a], [keyB, b]) => {
+      if (keyA === UNASSIGNED) return 1;
+      if (keyB === UNASSIGNED) return -1;
+      return a.name.localeCompare(b.name);
     });
   }, [devices, query]);
 
-  const totalShown = groups?.reduce((sum, [, list]) => sum + list.length, 0) ?? 0;
+  const totalShown = groupedDevices?.reduce((sum, [, g]) => sum + g.devices.length, 0) ?? 0;
   const selectedDevice = useMemo(
     () => devices?.find((d) => d.id === selectedId) ?? null,
     [devices, selectedId],
@@ -165,7 +212,8 @@ export function DevicesPage() {
     setEditingDeviceId(d.id);
     setEditDraft({
       device_name: d.device_name,
-      location_id: d.location_id ?? '',
+      group_id: d.group_id ?? '',
+      new_group_name: '',
     });
   }
 
@@ -182,15 +230,50 @@ export function DevicesPage() {
     setSaving(true);
     setEditError(null);
     try {
-      const body: Partial<{ deviceName: string; locationId: string }> = {};
+      // Determine target group_id. If the operator picked "Create new
+      // group...", create the group first then patch the device with the
+      // new group's id. If they picked "Unassigned" (empty string), send
+      // null to clear the device's group.
+      let targetGroupId: string | null | undefined = undefined;
+      if (editDraft.group_id === '__new__') {
+        const name = editDraft.new_group_name.trim();
+        if (!name) {
+          setEditError('New group name cannot be empty.');
+          setSaving(false);
+          return;
+        }
+        try {
+          const created = await api<{ group: Group }>('/api/groups', {
+            method: 'POST',
+            body: JSON.stringify({ name }),
+          });
+          targetGroupId = created.group.id;
+          // Make the new group visible in the dropdown for next edits.
+          setGroups((prev) => [...prev, created.group].sort((a, b) =>
+            a.name.localeCompare(b.name),
+          ));
+        } catch (err) {
+          setEditError(err instanceof ApiError ? err.message : 'failed to create group');
+          setSaving(false);
+          return;
+        }
+      } else if (editDraft.group_id === '') {
+        targetGroupId = null;
+      } else if (editDraft.group_id !== (original.group_id ?? '')) {
+        targetGroupId = editDraft.group_id;
+      }
+
+      const body: Partial<{ deviceName: string; groupId: string | null }> = {};
       const newName = editDraft.device_name.trim();
-      const newLocation = editDraft.location_id.trim();
       if (newName !== original.device_name) body.deviceName = newName;
-      if (newLocation !== (original.location_id ?? '')) body.locationId = newLocation;
+      if (targetGroupId !== undefined && targetGroupId !== (original.group_id ?? null)) {
+        body.groupId = targetGroupId;
+      }
       if (Object.keys(body).length === 0) {
         cancelRowEdit();
         return;
       }
+
       const response = await api<{ device: Device }>(`/api/devices/${original.id}`, {
         method: 'PATCH',
         body: JSON.stringify(body),
@@ -198,6 +281,9 @@ export function DevicesPage() {
       setDevices((prev) =>
         prev ? prev.map((d) => (d.id === original.id ? response.device : d)) : prev,
       );
+      // Reload groups since the device-count display in the dropdown is
+      // now stale for both the source and destination groups.
+      reloadGroups();
       cancelRowEdit();
     } catch (err) {
       setEditError(err instanceof ApiError ? err.message : 'save failed');
@@ -206,13 +292,13 @@ export function DevicesPage() {
     }
   }
 
-  function startGroupRename(storeKey: string, e: React.MouseEvent) {
+  function startGroupRename(groupKey: string, currentName: string, e: React.MouseEvent) {
     e.stopPropagation();
-    if (storeKey === UNASSIGNED) return;
+    if (groupKey === UNASSIGNED) return;
     setEditingDeviceId(null);
     setEditError(null);
-    setEditingGroupKey(storeKey);
-    setGroupDraft(storeKey);
+    setEditingGroupKey(groupKey);
+    setGroupDraft(currentName);
   }
 
   function cancelGroupRename() {
@@ -220,32 +306,51 @@ export function DevicesPage() {
     setEditError(null);
   }
 
-  async function saveGroupRename(oldKey: string, devicesInGroup: Device[]) {
-    const newKey = groupDraft.trim();
-    if (!newKey) {
-      setEditError('Store name cannot be empty.');
+  async function saveGroupRename(groupKey: string, oldName: string) {
+    const newName = groupDraft.trim();
+    if (!newName) {
+      setEditError('Group name cannot be empty.');
       return;
     }
-    if (newKey === oldKey) {
+    if (newName === oldName) {
       cancelGroupRename();
       return;
     }
     setSaving(true);
     setEditError(null);
     try {
-      const updated = await Promise.all(
-        devicesInGroup.map((d) =>
-          api<{ device: Device }>(`/api/devices/${d.id}`, {
-            method: 'PATCH',
-            body: JSON.stringify({ locationId: newKey }),
-          }),
-        ),
-      );
-      const updatedById = new Map(updated.map((r) => [r.device.id, r.device]));
-      setDevices((prev) => (prev ? prev.map((d) => updatedById.get(d.id) ?? d) : prev));
+      // Single PATCH /api/groups/:id -- backend handles the rename
+      // atomically. All devices in this group automatically see the new
+      // name on the next devices fetch.
+      await api(`/api/groups/${groupKey}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ name: newName }),
+      });
+      // Reload both lists so every device row reflects the new group name.
+      await load();
       cancelGroupRename();
     } catch (err) {
       setEditError(err instanceof ApiError ? err.message : 'rename failed');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function deleteGroup(groupKey: string, groupName: string, deviceCount: number) {
+    if (groupKey === UNASSIGNED) return;
+    const ok = window.confirm(
+      `Delete group "${groupName}"? ${deviceCount > 0
+        ? `${deviceCount} ${deviceCount === 1 ? 'device' : 'devices'} will become Unassigned.`
+        : 'No devices are currently in this group.'}`,
+    );
+    if (!ok) return;
+    setSaving(true);
+    setEditError(null);
+    try {
+      await api(`/api/groups/${groupKey}`, { method: 'DELETE' });
+      await load();
+    } catch (err) {
+      setEditError(err instanceof ApiError ? err.message : 'delete failed');
     } finally {
       setSaving(false);
     }
@@ -305,11 +410,11 @@ export function DevicesPage() {
                   <th style={{ width: 60 }}></th>
                 </tr>
               </thead>
-              {groups!.map(([storeKey, storeDevices]) => (
-                <tbody key={storeKey}>
+              {groupedDevices!.map(([groupKey, bucket]) => (
+                <tbody key={groupKey}>
                   <tr className="group-header">
                     <td colSpan={5}>
-                      {editingGroupKey === storeKey ? (
+                      {editingGroupKey === groupKey ? (
                         <span className="row-flex">
                           <input
                             type="text"
@@ -319,12 +424,12 @@ export function DevicesPage() {
                             autoFocus
                             style={{ maxWidth: 280 }}
                             onKeyDown={(e) => {
-                              if (e.key === 'Enter') saveGroupRename(storeKey, storeDevices);
+                              if (e.key === 'Enter') saveGroupRename(groupKey, bucket.name);
                               if (e.key === 'Escape') cancelGroupRename();
                             }}
                           />
                           <button
-                            onClick={() => saveGroupRename(storeKey, storeDevices)}
+                            onClick={() => saveGroupRename(groupKey, bucket.name)}
                             disabled={saving}
                             className="icon-btn"
                             title="Save"
@@ -339,35 +444,45 @@ export function DevicesPage() {
                           >
                             <X size={14} />
                           </button>
-                          <span className="muted">
-                            renaming will move {storeDevices.length}{' '}
-                            {storeDevices.length === 1 ? 'device' : 'devices'}
-                          </span>
                         </span>
                       ) : (
                         <span className="row-flex">
                           <strong>
-                            {storeKey === UNASSIGNED ? 'Unassigned' : storeKey}
+                            {groupKey === UNASSIGNED ? 'Unassigned' : bucket.name}
                           </strong>
                           <span className="muted">
-                            {storeDevices.length}{' '}
-                            {storeDevices.length === 1 ? 'device' : 'devices'}
+                            {bucket.devices.length}{' '}
+                            {bucket.devices.length === 1 ? 'device' : 'devices'}
                           </span>
-                          {storeKey !== UNASSIGNED && (
-                            <button
-                              onClick={(e) => startGroupRename(storeKey, e)}
-                              className="icon-btn"
-                              title="Rename store (moves all devices in this group)"
-                              style={{ marginLeft: 'auto' }}
-                            >
-                              <Pencil size={12} />
-                            </button>
+                          {groupKey !== UNASSIGNED && (
+                            <span className="row-flex" style={{ marginLeft: 'auto', gap: 4 }}>
+                              <button
+                                onClick={(e) => startGroupRename(groupKey, bucket.name, e)}
+                                className="icon-btn"
+                                title="Rename group"
+                              >
+                                <Pencil size={12} />
+                              </button>
+                              {isAdmin && (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    deleteGroup(groupKey, bucket.name, bucket.devices.length);
+                                  }}
+                                  className="icon-btn"
+                                  title="Delete group (devices become Unassigned)"
+                                  style={{ color: 'var(--accent)' }}
+                                >
+                                  <Trash2 size={12} />
+                                </button>
+                              )}
+                            </span>
                           )}
                         </span>
                       )}
                     </td>
                   </tr>
-                  {storeDevices.map((d) => {
+                  {bucket.devices.map((d) => {
                     const isEditing = editingDeviceId === d.id;
                     const isSelected = selectedId === d.id;
                     return (
@@ -397,20 +512,40 @@ export function DevicesPage() {
                                   if (e.key === 'Escape') cancelRowEdit();
                                 }}
                               />
-                              <input
-                                type="text"
-                                value={editDraft.location_id}
+                              <select
+                                value={editDraft.group_id}
                                 onChange={(e) =>
-                                  setEditDraft((dr) => ({ ...dr, location_id: e.target.value }))
+                                  setEditDraft((dr) => ({
+                                    ...dr,
+                                    group_id: e.target.value,
+                                    new_group_name: '',
+                                  }))
                                 }
                                 disabled={saving}
-                                maxLength={64}
-                                placeholder="Store id (blank = unassigned)"
-                                onKeyDown={(e) => {
-                                  if (e.key === 'Enter') saveRowEdit(d);
-                                  if (e.key === 'Escape') cancelRowEdit();
-                                }}
-                              />
+                              >
+                                <option value="">Unassigned</option>
+                                {groups.map((g) => (
+                                  <option key={g.id} value={g.id}>{g.name}</option>
+                                ))}
+                                <option value="__new__">+ Create new group...</option>
+                              </select>
+                              {editDraft.group_id === '__new__' && (
+                                <input
+                                  type="text"
+                                  value={editDraft.new_group_name}
+                                  onChange={(e) =>
+                                    setEditDraft((dr) => ({ ...dr, new_group_name: e.target.value }))
+                                  }
+                                  disabled={saving}
+                                  maxLength={64}
+                                  placeholder="New group name"
+                                  autoFocus
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') saveRowEdit(d);
+                                    if (e.key === 'Escape') cancelRowEdit();
+                                  }}
+                                />
+                              )}
                             </div>
                           ) : (
                             <span className="device-name-cell">{d.device_name}</span>

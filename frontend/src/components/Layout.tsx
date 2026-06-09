@@ -4,7 +4,7 @@
 // DevicesPage) own that internally -- keeping it page-scoped avoids
 // plumbing device state through the Layout for pages that don't care.
 
-import { LogOut, Tablet } from 'lucide-react';
+import { LogOut, Tablet, Users } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { NavLink } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
@@ -28,6 +28,15 @@ export function Layout({ children }: { children: ReactNode }) {
             <Tablet size={16} />
             <span>Devices</span>
           </NavLink>
+          {user?.role === 'admin' && (
+            <NavLink
+              to="/users"
+              className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}
+            >
+              <Users size={16} />
+              <span>Users</span>
+            </NavLink>
+          )}
           {/* Future nav slots can go here (Reports, Settings, etc.) */}
         </nav>
 

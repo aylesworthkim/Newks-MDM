@@ -32,7 +32,9 @@ import { query } from './db/pool';
 import { authRouter } from './routes/auth';
 import { commandsRouter } from './routes/commands';
 import { devicesRouter } from './routes/devices';
+import { groupsRouter } from './routes/groups';
 import { deviceSessionsRouter, sessionsRouter } from './routes/sessions';
+import { usersRouter } from './routes/users';
 import { attachWebSocketServer } from './ws/server';
 
 const isProduction = process.env.NODE_ENV === 'production';
@@ -102,6 +104,8 @@ async function main(): Promise<void> {
   app.use('/api/devices/:deviceId/commands', commandsRouter);
   app.use('/api/devices/:deviceId/sessions', deviceSessionsRouter);
   app.use('/api/sessions', sessionsRouter);
+  app.use('/api/groups', groupsRouter);
+  app.use('/api/users', usersRouter);
 
   // Production: serve the built React frontend. The SPA fallback returns
   // index.html for any non-/api, non-/ws path so React Router can take over

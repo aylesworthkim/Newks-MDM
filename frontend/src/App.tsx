@@ -6,6 +6,7 @@ import { Layout } from './components/Layout';
 import { LoginPage } from './pages/LoginPage';
 import { DevicesPage } from './pages/DevicesPage';
 import { RemoteScreenPage } from './pages/RemoteScreenPage';
+import { UsersPage } from './pages/UsersPage';
 
 // Guards every authenticated route. While we're still verifying a stored
 // token, render a neutral "Loading..." so we don't flash the login screen
@@ -28,6 +29,7 @@ function LayoutRoutes() {
           <Route path="/" element={<Navigate to="/devices" replace />} />
           <Route path="/devices" element={<DevicesPage />} />
           <Route path="/devices/:id" element={<DevicesPage />} />
+          <Route path="/users" element={<UsersPage />} />
           <Route path="*" element={<Navigate to="/devices" replace />} />
         </Routes>
       </Layout>
