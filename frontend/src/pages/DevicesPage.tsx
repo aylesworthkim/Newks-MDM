@@ -46,7 +46,12 @@ interface Group {
 // Shape of GET /api/devices/:id/commands
 interface CommandRow {
   id: string;
-  command_type: 'PING' | 'FETCH_DIAGNOSTICS' | 'OPEN_APP' | 'RESTART_APP';
+  command_type:
+    | 'PING'
+    | 'FETCH_DIAGNOSTICS'
+    | 'OPEN_APP'
+    | 'RESTART_APP'
+    | 'CHECK_FOR_UPDATE';
   payload: Record<string, unknown>;
   status: 'queued' | 'dispatched' | 'completed' | 'failed' | 'expired';
   requested_at: string;
@@ -57,7 +62,13 @@ interface CommandRow {
 }
 
 type CommandType = CommandRow['command_type'];
-const COMMAND_TYPES: CommandType[] = ['PING', 'FETCH_DIAGNOSTICS', 'OPEN_APP', 'RESTART_APP'];
+const COMMAND_TYPES: CommandType[] = [
+  'PING',
+  'FETCH_DIAGNOSTICS',
+  'OPEN_APP',
+  'RESTART_APP',
+  'CHECK_FOR_UPDATE',
+];
 
 const UNASSIGNED = '__unassigned__';
 
