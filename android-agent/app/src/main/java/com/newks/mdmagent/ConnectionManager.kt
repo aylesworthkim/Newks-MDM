@@ -179,6 +179,7 @@ class ConnectionManager private constructor(
             "INPUT_TAP" -> handleInputTap(payload)
             "INPUT_SWIPE" -> handleInputSwipe(payload)
             "INPUT_KEY" -> handleInputKey(payload)
+            "INPUT_PASTE" -> handleInputPaste(payload)
             "ERROR" -> Log.w(TAG, "server error: ${payload["message"]}")
         }
     }
@@ -326,6 +327,21 @@ class ConnectionManager private constructor(
         }
         val ok = AgentAccessibilityService.performGlobalKey(key)
         sendInputResult(sessionId, ok, if (ok) null else "unknown key or dispatch failed")
+    }
+
+    private fun handleInputPaste(payload: JsonObject) {
+        val sessionId = payload["sessionId"]?.jsonPrimitive?.contentOrNull ?: return
+        val text = payload["text"]?.jsonPrimitive?.contentOrNull ?: return
+
+        if (!AgentAccessibilityService.isEnabled()) {
+            sendInputResult(sessionId, false, "accessibility service not enabled")
+            return
+        }
+        val ok = AgentAccessibilityService.pasteText(appContext, text)
+        sendInputResult(
+            sessionId, ok,
+            if (ok) null else "no focused editable field on the tablet",
+        )
     }
 
     private fun appendLog(entry: CommandLogEntry) {

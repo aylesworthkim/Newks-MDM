@@ -2,15 +2,19 @@ package com.newks.mdmagent
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Path
 import android.os.Build
+import android.os.Bundle
 import android.provider.Settings
 import android.text.TextUtils
 import android.util.Log
 import android.view.Display
 import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityNodeInfo
 import java.io.ByteArrayOutputStream
 
 /**
@@ -238,6 +242,65 @@ class AgentAccessibilityService : AccessibilityService() {
          *  accessibility-based screen capture? */
         fun isScreenshotSupported(): Boolean =
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+
+        /**
+         * Paste [text] into the currently-focused editable field on the
+         * device. Used by the v0.7.0+ clipboard-share feature: the
+         * operator hits Ctrl+V on the remote screen view in the browser,
+         * the browser sends an INPUT_PASTE WS message, ConnectionManager
+         * routes it here.
+         *
+         * Implementation: write to the device's clipboard via
+         * ClipboardManager, then dispatch ACTION_PASTE on the focused
+         * node so the field receives the paste like a normal user paste.
+         * Falls back to ACTION_SET_TEXT (which replaces the entire field
+         * content) if the focused node doesn't expose ACTION_PASTE --
+         * typically because it's a custom text input that didn't wire it
+         * up.
+         *
+         * Returns true if a focused editable was found and the paste was
+         * dispatched. Returns false on no focused field, no editable, or
+         * dispatch failure -- the caller surfaces the failure as
+         * INPUT_RESULT.ok=false so the operator sees an actionable error.
+         *
+         * Requires `canRetrieveWindowContent="true"` in the accessibility
+         * config XML (added in v0.7.0).
+         */
+        fun pasteText(context: Context, text: String): Boolean {
+            val svc = instance ?: return false
+            return try {
+                val root = svc.rootInActiveWindow ?: run {
+                    Log.w(TAG, "pasteText: no active window root")
+                    return false
+                }
+                val focused = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: run {
+                    Log.w(TAG, "pasteText: no focused input on screen")
+                    return false
+                }
+
+                val supportsPaste = focused.actionList.any { it.id == AccessibilityNodeInfo.ACTION_PASTE }
+                if (supportsPaste) {
+                    // Standard paste path -- preserves cursor position, inserts at it.
+                    val clip = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    clip.setPrimaryClip(ClipData.newPlainText("paste", text))
+                    return focused.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+                }
+
+                // Fallback: replace the whole field. Less surgical but works for
+                // most editable views including custom inputs.
+                Log.d(TAG, "pasteText: ACTION_PASTE not exposed; falling back to ACTION_SET_TEXT")
+                val args = Bundle().apply {
+                    putCharSequence(
+                        AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                        text,
+                    )
+                }
+                focused.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+            } catch (e: Exception) {
+                Log.w(TAG, "pasteText failed", e)
+                false
+            }
+        }
 
         @androidx.annotation.RequiresApi(Build.VERSION_CODES.R)
         private fun encodeScreenshot(

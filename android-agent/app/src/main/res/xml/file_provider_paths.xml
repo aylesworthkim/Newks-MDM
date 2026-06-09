@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  FileProvider paths. Used to share the downloaded agent APK from our
+  cacheDir with Android's Package Installer at install-prompt time.
+  Cache-only: we never share any other location.
+-->
+<paths>
+    <cache-path name="agent_apk_cache" path="." />
+</paths>

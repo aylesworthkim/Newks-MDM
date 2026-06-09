@@ -13,6 +13,11 @@ import android.os.IBinder
 import android.provider.Settings
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 
 /**
  * Foreground service whose job is to keep the agent's process alive so the
@@ -26,6 +31,8 @@ import androidx.core.app.NotificationCompat
  * which is exactly the case where we want to prompt them.
  */
 class HeartbeatService : Service() {
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onCreate() {
         super.onCreate()
@@ -55,11 +62,25 @@ class HeartbeatService : Service() {
         // through Settings.
         maybePostEnablePromptNotification()
 
+        // v0.7.0+: check for a newer agent version and prompt to install
+        // if one is available. Runs on every service start (boot, app
+        // open, system-restart) which gives us roughly daily checks in
+        // typical store usage. Silent fail-safe -- if the backend is
+        // unreachable or the JSON parse fails, the user sees nothing and
+        // we retry next time.
+        val backendUrl = config.state.value.backendUrl
+        if (config.state.value.deviceId != null && backendUrl.isNotBlank()) {
+            scope.launch {
+                AgentUpdater(applicationContext).checkAndPrompt(backendUrl)
+            }
+        }
+
         return START_STICKY
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        scope.cancel()
         // Deliberately do NOT stop the connection on destroy. The system
         // can tear us down during a memory squeeze; we want the next
         // onStartCommand (START_STICKY) to re-attach.

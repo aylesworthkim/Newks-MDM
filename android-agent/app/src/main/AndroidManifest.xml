@@ -30,6 +30,12 @@
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
                      tools:ignore="QueryAllPackagesPermission" />
 
+    <!-- v0.7.0+: in-app updater. Required so the notification posted by
+         AgentUpdater can open Android's Package Installer for the
+         downloaded APK. User has to approve "install from this source"
+         the first time; Android remembers thereafter. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
     <application
         android:label="@string/app_name"
         android:theme="@style/Theme.NewksMdmAgent"
@@ -107,5 +113,21 @@
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
             </intent-filter>
         </receiver>
+
+        <!--
+          v0.7.0+ FileProvider: used by AgentUpdater to share the downloaded
+          APK file from our cacheDir with Android's Package Installer.
+          Granted per-Intent via FLAG_GRANT_READ_URI_PERMISSION; not
+          exported as a general content provider.
+        -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_provider_paths" />
+        </provider>
     </application>
 </manifest>

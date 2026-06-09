@@ -1,0 +1,6 @@
+{
+  "versionCode": 9,
+  "versionName": "0.7.0",
+  "downloadUrl": "/agent.apk",
+  "releaseNotes": "In-app updater (no more SureMDM for updates) + clipboard paste (Ctrl+V on the remote screen pastes from your computer into the tablet's focused text field). Bump this file whenever you ship a new APK so deployed tablets pick it up."
+}

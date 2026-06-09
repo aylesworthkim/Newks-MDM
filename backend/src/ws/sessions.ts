@@ -112,6 +112,13 @@ const browserInputSchema = z.discriminatedUnion('type', [
     // System keys we support. Letter/digit injection is out of scope for MVP.
     key: z.enum(['BACK', 'HOME', 'RECENTS']),
   }),
+  z.object({
+    // v0.7.0+: paste text from the operator's clipboard into whatever
+    // text field is currently focused on the tablet. Cap at 10KB so a
+    // pasted document can't blow up a session.
+    type: z.literal('INPUT_PASTE'),
+    text: z.string().max(10_000),
+  }),
 ]);
 
 export function attachSessionWebSocketServer(

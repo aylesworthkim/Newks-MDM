@@ -4,21 +4,25 @@
   remote support in v0.5.0+. It powers BOTH input dispatch (taps, swipes,
   system keys) AND screen capture via takeScreenshot (API 30+).
 
+  v0.7.0+: canRetrieveWindowContent flipped to true. Required so the agent
+  can find the currently-focused text field on the device and dispatch a
+  paste action into it (clipboard sharing from the browser). This grants
+  the service the ability to read the on-screen view hierarchy (text,
+  control IDs, structure). It does NOT change what is screen-captured.
+  All on-device reads happen only when the operator triggers a paste from
+  an active remote-control session.
+
   Switching to accessibility-based capture removed the MediaProjection
   consent dialog entirely. Once the user enables this service once in
   Settings, support staff can view and control the tablet across reboots
   with no per-session prompts.
-
-  We deliberately do NOT request canRetrieveWindowContent. We don't need
-  to inspect or log the on-screen view hierarchy. Screen capture (via
-  takeScreenshot) is a separate capability flag.
 -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:accessibilityEventTypes="typeWindowStateChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:accessibilityFlags="flagDefault"
     android:canPerformGestures="true"
-    android:canRetrieveWindowContent="false"
+    android:canRetrieveWindowContent="true"
     android:canTakeScreenshot="true"
     android:notificationTimeout="100"
     android:description="@string/accessibility_service_description"

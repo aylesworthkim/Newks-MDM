@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { ArrowLeftCircle, Eye, Home, Square, X } from 'lucide-react';
+import { ArrowLeftCircle, ClipboardPaste, Eye, Home, Square, X } from 'lucide-react';
 
 import { api, ApiError, getToken } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -66,8 +66,64 @@ export function RemoteScreenPage() {
   // accurate clicks. Only runs once per session.
   const popupResizedRef = useRef(false);
 
+  // v0.7.0+ clipboard sharing: Ctrl+V reads the operator's clipboard and
+  // sends INPUT_PASTE; a "Paste" button opens a textarea fallback for
+  // browsers that block navigator.clipboard.readText().
+  const [pasteModalOpen, setPasteModalOpen] = useState(false);
+  const [pasteText, setPasteText] = useState('');
+  const [pasteHint, setPasteHint] = useState<string | null>(null);
+
   const hasControlRole = user?.role === 'admin' || user?.role === 'support';
   const canControl = hasControlRole && status === 'active' && accessibilityEnabled !== false;
+
+  useEffect(() => {
+    if (!canControl) return;
+    function onKeyDown(e: KeyboardEvent) {
+      // Cmd+V on macOS, Ctrl+V elsewhere.
+      const isPaste = (e.metaKey || e.ctrlKey) && (e.key === 'v' || e.key === 'V');
+      if (!isPaste) return;
+      // Don't hijack paste if the user is typing into a real text field
+      // (e.g., they opened DevTools or hit V in our own paste modal).
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || target?.isContentEditable) return;
+      e.preventDefault();
+      if (!navigator.clipboard?.readText) {
+        setPasteHint('Browser clipboard read is blocked. Use the Paste button instead.');
+        setPasteModalOpen(true);
+        return;
+      }
+      navigator.clipboard.readText().then((text) => {
+        if (!text) return;
+        sendWs({ type: 'INPUT_PASTE', text });
+        setPasteHint(`Pasted ${text.length} character${text.length === 1 ? '' : 's'}.`);
+        setTimeout(() => setPasteHint(null), 2500);
+      }).catch((err) => {
+        // Permission denied or non-HTTPS context. Show the fallback.
+        console.warn('clipboard.readText failed', err);
+        setPasteHint('Browser denied clipboard access. Use the Paste button instead.');
+        setPasteModalOpen(true);
+      });
+    }
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+    // canControl pulls in user role + status + accessibility; recreate
+    // listener when any of those changes so we always reflect latest state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canControl]);
+
+  function submitPasteFromModal(e: FormEvent) {
+    e.preventDefault();
+    if (!pasteText) {
+      setPasteModalOpen(false);
+      return;
+    }
+    sendWs({ type: 'INPUT_PASTE', text: pasteText });
+    setPasteHint(`Pasted ${pasteText.length} character${pasteText.length === 1 ? '' : 's'}.`);
+    setPasteText('');
+    setPasteModalOpen(false);
+    setTimeout(() => setPasteHint(null), 2500);
+  }
 
   // Initial accessibility status from the device record so the UI doesn't
   // wait for the first WS message to know whether controls will work.
@@ -373,6 +429,17 @@ export function RemoteScreenPage() {
               <button onClick={() => sendKey('RECENTS')} disabled={!canControl} className="row-flex">
                 <Square size={14} /> Recents
               </button>
+              <button
+                onClick={() => {
+                  setPasteText('');
+                  setPasteModalOpen(true);
+                }}
+                disabled={!canControl}
+                className="row-flex"
+                title="Paste text into the focused field on the tablet (Ctrl+V also works)"
+              >
+                <ClipboardPaste size={14} /> Paste
+              </button>
               {!canControl && user?.role === 'viewer' && (
                 <span className="muted" style={{ marginLeft: 12, fontSize: 13 }}>
                   View-only role
@@ -383,16 +450,63 @@ export function RemoteScreenPage() {
                   Accessibility service disabled on tablet
                 </span>
               )}
+              {pasteHint && (
+                <span className="muted" style={{ marginLeft: 12, fontSize: 13 }}>
+                  {pasteHint}
+                </span>
+              )}
             </div>
 
             <p className="muted" style={{ marginTop: 12, fontSize: 13 }}>
-              Click to tap. Click-and-drag to swipe. Remote input requires the
-              tablet's accessibility service to be enabled (Settings →
-              Accessibility → Newk's MDM Agent).
+              Click to tap. Click-and-drag to swipe. <strong>Ctrl+V</strong>
+              {' '}pastes from your clipboard into whatever text field is
+              focused on the tablet. Remote input requires the tablet's
+              accessibility service (Settings → Accessibility → Newk's MDM Agent).
             </p>
           </>
         )}
       </div>
+
+      {pasteModalOpen && (
+        <div className="modal-backdrop" onClick={() => setPasteModalOpen(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="row-flex" style={{ marginBottom: 12 }}>
+              <h3 style={{ margin: 0, fontSize: 16 }}>Paste text to tablet</h3>
+              <button
+                className="icon-btn"
+                onClick={() => setPasteModalOpen(false)}
+                style={{ marginLeft: 'auto' }}
+                aria-label="Close"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <form onSubmit={submitPasteFromModal}>
+              <div className="field">
+                <label htmlFor="pasteTextArea">Text</label>
+                <textarea
+                  id="pasteTextArea"
+                  value={pasteText}
+                  onChange={(e) => setPasteText(e.target.value)}
+                  autoFocus
+                  rows={6}
+                  maxLength={10_000}
+                  style={{ width: '100%', font: 'inherit', padding: 8 }}
+                  placeholder="Paste or type the text to send to the tablet's focused field"
+                />
+                <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                  The tablet must have an editable text field focused. If
+                  paste isn't supported on that field, the entire field's
+                  contents will be replaced with this text.
+                </div>
+              </div>
+              <button type="submit" className="primary" disabled={!pasteText}>
+                Send to tablet
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
 
       <style>{`
         @keyframes rippleFade {
