@@ -1046,6 +1046,9 @@ function DiagnosticsResultView({ result }: { result: Record<string, unknown> }) 
   const pkgs = Array.isArray(result.installedPackages)
     ? (result.installedPackages as string[])
     : [];
+  const recentLogs = Array.isArray(result.recentLogs)
+    ? (result.recentLogs as string[])
+    : [];
 
   return (
     <div className="cmd-detail-block">
@@ -1066,6 +1069,30 @@ function DiagnosticsResultView({ result }: { result: Record<string, unknown> }) 
           <div className="diag-pkgs">
             {pkgs.map((p) => <code key={p}>{p}</code>)}
           </div>
+        </div>
+      )}
+      {recentLogs.length > 0 && (
+        <div style={{ marginTop: 8 }}>
+          <div className="cmd-detail-label" style={{ fontSize: 11 }}>
+            Recent agent logs ({recentLogs.length})
+          </div>
+          <pre
+            style={{
+              maxHeight: 240,
+              overflow: 'auto',
+              fontSize: 11,
+              lineHeight: 1.4,
+              background: '#0f172a',
+              color: '#e2e8f0',
+              padding: 8,
+              borderRadius: 4,
+              margin: 0,
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+            }}
+          >
+            {recentLogs.join('\n')}
+          </pre>
         </div>
       )}
     </div>
